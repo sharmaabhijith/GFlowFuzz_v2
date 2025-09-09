@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 import yaml
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -56,7 +56,7 @@ class SQLCoderAgent:
         sql = re.sub(r'```sql\n?', '', raw_sql)
         sql = re.sub(r'```\n?', '', sql)
         sql = ' '.join(sql.split())
-        sql = sql.rstrip(';') + ';'
+        sql = sql.rstrip(';')
         return sql.strip()
 
     def _validate_sql_query(self, sql_query: str) -> bool:
@@ -93,17 +93,35 @@ class SQLCoderAgent:
         """Get the city to airport code mapping"""
         return self.city_to_airport.copy()
 
-    async def generate_sql_query(self, user_request: str) -> Dict[str, Any]:
+    async def generate_sql_query(self, user_request: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
         """
         Convert natural language flight request to SQL query
+        
+        Args:
+            user_request: The current user request
+            conversation_history: Optional list of previous conversation messages for context
         
         Returns:
             Dict with 'sql_query', 'success', and optional 'error' keys
         """
+        # Build context from conversation history if provided
+        context = ""
+        if conversation_history:
+            # Get last 5 relevant messages for context
+            recent_messages = conversation_history[-10:]
+            context = "Previous conversation context:\n"
+            for msg in recent_messages:
+                if msg["role"] in ["user", "assistant"]:
+                    context += f"{msg['role'].upper()}: {msg['content'][:200]}...\n"
+            context += "\n"
+        
         prompt = f"""
+        {context}
         Convert this natural language flight search request into a SQL query:
         
-        "{user_request}"
+        Current request: "{user_request}"
+        
+        Note: Use context from previous messages to understand references like "that flight", "the same date", "those flights", etc.
         """
         
         messages = [

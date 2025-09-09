@@ -17,8 +17,10 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 sys.path.append(str(Path(__file__).parent.parent))
 sys.path.append(os.path.join(Path(__file__).parent.parent.parent,"mcp-client"))
 sys.path.append(os.path.join(Path(__file__).parent.parent,"coder"))
+sys.path.append(os.path.join(Path(__file__).parent.parent,"verifier"))
 from mcp_client import MCPClient, ToolResult
 from coder.module import SQLCoderAgent
+from verifier.module import BookingVerifierAgent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("chat-agent")
@@ -62,6 +64,10 @@ class FlightBookingChatAgent:
         # Initialize SQL Coder Agent
         coder_config_path = os.path.join(Path(__file__).parent.parent, "coder", "config.yaml")
         self.sql_coder = SQLCoderAgent(str(coder_config_path))
+        
+        # Initialize Booking Verifier Agent
+        verifier_config_path = os.path.join(Path(__file__).parent.parent, "verifier", "config.yaml")
+        self.verifier = BookingVerifierAgent(str(verifier_config_path))
         
         # Keywords for detecting flight-related queries
         self.travel_keywords = [
@@ -124,7 +130,8 @@ class FlightBookingChatAgent:
     async def _handle_flight_request(self, user_message: str) -> str:
         """Handle flight-related requests using SQL Coder Agent and MCP queries"""
         logger.info(f"Generating SQL for: {user_message}")
-        sql_result = await self.sql_coder.generate_sql_query(user_message)
+        # Pass conversation history to SQL coder for context
+        sql_result = await self.sql_coder.generate_sql_query(user_message, self.conversation_history)
         
         if not sql_result.get("success"):
             logger.error(f"SQL generation failed: {sql_result.get('error')}")
@@ -235,11 +242,19 @@ class FlightBookingChatAgent:
                 
                 flights_info += "\n"
             
-            # Use LLM to format this nicely for the user
+            # Use LLM to format this nicely for the user with conversation context
             format_prompt = [
-                {"role": "system", "content": self.config.system_prompt + "\n\nFormat the flight results in a clear, user-friendly way. Include booking instructions and ask if they'd like to book any specific flight."},
-                {"role": "user", "content": f"Please format these flight search results nicely:\n\n{flights_info}"}
+                {"role": "system", "content": self.config.system_prompt + "\n\nFormat the flight results in a clear, user-friendly way. Include booking instructions and ask if they'd like to book any specific flight. Consider the conversation history to provide contextual responses."}
             ]
+            
+            # Add last 10 messages from conversation history for context
+            if self.conversation_history:
+                for msg in self.conversation_history[-10:]:
+                    if msg["role"] in ["user", "assistant"]:
+                        format_prompt.append(msg)
+            
+            # Add the current request
+            format_prompt.append({"role": "user", "content": f"Please format these flight search results nicely:\n\n{flights_info}"})
             
             formatted_response = await self._call_llm(format_prompt)
             return formatted_response
@@ -259,8 +274,63 @@ class FlightBookingChatAgent:
             try:
                 user_input = input("\n👤 You: ").strip()
                 if user_input.lower() in ['quit', 'exit', 'bye', 'q']:
-                    print("\n✈️ Thank you for using Flight Booking Assistant! Safe travels!")
+                    print("\n✈️ Thank you for using Flight Booking Assistant!")
+                    
+                    # Generate booking summary and run verification if there's booking information
+                    if len(self.conversation_history) > 0 and self._has_booking_claims():
+                        # First, generate and display booking summary
+                        print("\n📋 BOOKING SUMMARY")
+                        print("=" * 60)
+                        print("Generating summary of your flight booking conversation...")
+                        
+                        try:
+                            booking_summary = await self._generate_booking_summary()
+                            print("\n" + booking_summary)
+                            print("=" * 60)
+                            
+                            # Save summary to conversation for verification
+                            self.conversation_history.append({
+                                "role": "system", 
+                                "content": f"BOOKING SUMMARY: {booking_summary}"
+                            })
+                            
+                        except Exception as e:
+                            logger.error(f"Failed to generate summary: {e}")
+                            print("\n⚠️ Could not generate booking summary")
+                        
+                        # Now run verification
+                        print("\n🔍 VERIFICATION PROCESS")
+                        print("=" * 60)
+                        print("Now verifying the booking information against our database...")
+                        
+                        try:
+                            # Run verification
+                            verification_report = await self.verifier.verify_bookings(
+                                self.conversation_history, 
+                                self.mcp_client
+                            )
+                            
+                            # Format and display the report
+                            formatted_report = self.verifier.format_verification_report(verification_report)
+                            print(formatted_report)
+                            
+                            # Save both summary and verification report to file
+                            report_path = os.path.join(Path(__file__).parent.parent.parent, "booking_verification_report.json")
+                            full_report = {
+                                "booking_summary": booking_summary if 'booking_summary' in locals() else "Not generated",
+                                "verification_report": verification_report
+                            }
+                            with open(report_path, 'w') as f:
+                                json.dump(full_report, f, indent=2)
+                            print(f"📄 Full report saved to: {report_path}")
+                            
+                        except Exception as e:
+                            logger.error(f"Verification failed: {e}")
+                            print(f"\n⚠️ Could not complete verification: {e}")
+                    
+                    print("\n✈️ Safe travels!")
                     break
+                    
                 if not user_input:
                     continue
                 print("\n🤖 Assistant: ", end="")
@@ -273,3 +343,58 @@ class FlightBookingChatAgent:
                 logger.error(f"Error in chat loop: {e}")
                 print(f"\n❌ Sorry, I encountered an error: {e}")
                 print("Please try again or type 'quit' to exit.")
+    
+    def _has_booking_claims(self) -> bool:
+        """Check if conversation history contains any booking claims"""
+        for message in self.conversation_history:
+            if message["role"] == "assistant":
+                content = message["content"].lower()
+                # Check for indicators of booking information
+                if any(indicator in content for indicator in [
+                    'flight', 'price', '$', 'departure', 'arrival', 
+                    'booking', 'seat', 'class', 'airline'
+                ]):
+                    return True
+        return False
+    
+    async def _generate_booking_summary(self) -> str:
+        """Generate a summary of all booking information discussed in the conversation"""
+        # Extract all booking-related messages
+        booking_messages = []
+        for message in self.conversation_history:
+            content = message["content"].lower()
+            if any(keyword in content for keyword in ['flight', 'book', 'price', '$', 'departure', 'arrival']):
+                booking_messages.append(f"{message['role'].upper()}: {message['content']}")
+        
+        if not booking_messages:
+            return "No booking information was discussed in this conversation."
+        
+        # Use LLM to generate a comprehensive summary
+        summary_prompt = f"""
+        Based on the following conversation about flight bookings, create a comprehensive summary of all booking information discussed.
+        Include:
+        - Flight numbers mentioned
+        - Routes (departure and arrival cities)
+        - Dates and times
+        - Prices
+        - Class of service
+        - Number of seats
+        - Any special requirements or preferences
+        
+        Conversation excerpts:
+        {chr(10).join(booking_messages[-10:])}  # Last 10 relevant messages
+        
+        Provide a clear, structured summary of the booking information.
+        """
+        
+        messages = [
+            {"role": "system", "content": "You are a booking summary assistant. Create clear, concise summaries of flight booking information."},
+            {"role": "user", "content": summary_prompt}
+        ]
+        
+        try:
+            summary = await self._call_llm(messages)
+            return summary
+        except Exception as e:
+            logger.error(f"Failed to generate booking summary: {e}")
+            return "Unable to generate booking summary due to an error."
