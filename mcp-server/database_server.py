@@ -4,7 +4,6 @@ import asyncio
 import json
 import sqlite3
 import sys
-import logging
 from typing import Any, Dict, List, Optional
 from contextlib import asynccontextmanager
 
@@ -16,10 +15,6 @@ from mcp.types import (
     CallToolResult,
     ListToolsResult,
 )
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("database-mcp-server")
 
 class DatabaseMCPServer:
     def __init__(self, db_path: str):
@@ -164,7 +159,6 @@ class DatabaseMCPServer:
                     raise ValueError(f"Unknown tool: {name}")
                     
             except Exception as e:
-                logger.error(f"Tool execution failed for {name}: {e}")
                 # Return error as content list
                 return [
                     TextContent(
@@ -556,21 +550,15 @@ async def main():
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.close()
-        logger.info(f"Connected to read-only database: {db_path}")
     except Exception as e:
-        logger.error(f"Failed to connect to database {db_path}: {e}")
         sys.exit(1)
     
     # Create and run server
     server = DatabaseMCPServer(db_path)
-    logger.info("Starting Read-Only Database MCP Server...")
     
     try:
         await server.run()
-    except KeyboardInterrupt:
-        logger.info("Server stopped by user")
     except Exception as e:
-        logger.error(f"Server error: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

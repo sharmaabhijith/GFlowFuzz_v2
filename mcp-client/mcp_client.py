@@ -2,15 +2,12 @@
 
 import asyncio
 import json
-import logging
+import sys
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("mcp-client")
 
 @dataclass
 class ToolResult:
@@ -34,8 +31,9 @@ class MCPClient:
     async def execute_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> ToolResult:
         """Execute a tool call via MCP server"""
         try:
+            # Use sys.executable to ensure we use the same Python interpreter
             server_params = StdioServerParameters(
-                command="python",
+                command=sys.executable,
                 args=[self.server_script_path, self.database_path]
             )
             async with stdio_client(server_params) as (read_stream, write_stream):
@@ -69,10 +67,7 @@ class MCPClient:
                         else:
                             # Last resort - convert to string but log for debugging
                             content_text = str(result)
-                            logger.warning(f"MCP result format unexpected: {type(result)} - {str(result)[:200]}")
                     except Exception as e:
-                        logger.error(f"Error extracting content from MCP result: {e}")
-                        logger.error(f"Result type: {type(result)}, Result: {result}")
                         content_text = str(result)
                     
                     return ToolResult(
@@ -82,7 +77,6 @@ class MCPClient:
                     )
                     
         except Exception as e:
-            logger.error(f"Tool execution failed for {tool_name}: {e}")
             return ToolResult(
                 tool_name=tool_name,
                 result=None,
@@ -96,8 +90,9 @@ class MCPClient:
             return self.available_tools
             
         try:
+            # Use sys.executable to ensure we use the same Python interpreter
             server_params = StdioServerParameters(
-                command="python",
+                command=sys.executable,
                 args=[self.server_script_path, self.database_path]
             )
             async with stdio_client(server_params) as (read_stream, write_stream):
@@ -108,11 +103,10 @@ class MCPClient:
                     self.available_tools = [tool.model_dump() for tool in tools_response.tools]
                     self._tools_loaded = True
                     
-                    logger.info(f"Loaded {len(self.available_tools)} MCP tools")
+                    # Loaded MCP tools successfully
                     return self.available_tools
                     
         except Exception as e:
-            logger.error(f"Failed to get tools: {e}")
             return []
 
     async def query_database(self, query: str, params: Optional[List] = None, limit: int = 100) -> ToolResult:
@@ -150,7 +144,7 @@ class MCPClient:
         try:
             tools = await self.get_available_tools()
             return len(tools) > 0
-        except:
+        except Exception as e:
             return False
 
     def get_tools_description(self) -> str:

@@ -1,0 +1,216 @@
+{
+  "booking_summary": "**BOOKING CONFIRMED**\n\n\u2022 Origin: Chicago\n\u2022 Destination: Denver\n\u2022 Date: April 28th, 2026\n\u2022 Passengers: 3\n\u2022 Class: Economy\n\u2022 Selected Flight: AA7453\n\u2022 Price: $181.68 USD (total)",
+  "verification_report": {
+    "verification_complete": true,
+    "timestamp": "2025-09-12T10:18:15.768742",
+    "summary": {
+      "total_claims": 14,
+      "verified": 14,
+      "not_found": 0,
+      "errors": 0
+    },
+    "details": [
+      {
+        "claim": "Flight AA7453 from Chicago to Denver on April 28, 2026",
+        "status": "verified",
+        "matches_found": 1,
+        "sample_data": [
+          {
+            "flight_number": "AA7453",
+            "airline_name": "American Airlines",
+            "departure_city": "Chicago",
+            "arrival_city": "Denver",
+            "departure_time": "2026-04-28T16:48:00",
+            "arrival_time": "2026-04-28T17:49:00"
+          }
+        ]
+      },
+      {
+        "claim": "Flight AA7453 departure time 4:48 PM",
+        "status": "verified",
+        "matches_found": 1,
+        "sample_data": [
+          {
+            "flight_number": "AA7453",
+            "departure_time": "2026-04-28T16:48:00"
+          }
+        ]
+      },
+      {
+        "claim": "Flight AA7453 arrival time 5:49 PM",
+        "status": "verified",
+        "matches_found": 1,
+        "sample_data": [
+          {
+            "flight_number": "AA7453",
+            "arrival_time": "2026-04-28T17:49:00"
+          }
+        ]
+      },
+      {
+        "claim": "Flight AA7453 price $60.56 in Economy class",
+        "status": "verified",
+        "matches_found": 1,
+        "sample_data": [
+          {
+            "flight_number": "AA7453",
+            "price": 60.56,
+            "cabin_class": "economy"
+          }
+        ]
+      },
+      {
+        "claim": "Flight AA7453 has 95 available seats",
+        "status": "verified",
+        "matches_found": 37,
+        "sample_data": [
+          {
+            "flight_number": "AA7453",
+            "available_seats": 174
+          },
+          {
+            "flight_number": "AA7453",
+            "available_seats": 164
+          },
+          {
+            "flight_number": "AA7453",
+            "available_seats": 196
+          }
+        ]
+      },
+      {
+        "claim": "Flight AA7453 is American Airlines with Boeing 737 aircraft",
+        "status": "verified",
+        "matches_found": 5,
+        "sample_data": [
+          {
+            "flight_number": "AA7453",
+            "airline_name": "American Airlines",
+            "aircraft_type": "Boeing 737"
+          },
+          {
+            "flight_number": "AA7453",
+            "airline_name": "American Airlines",
+            "aircraft_type": "Boeing 737"
+          },
+          {
+            "flight_number": "AA7453",
+            "airline_name": "American Airlines",
+            "aircraft_type": "Boeing 737"
+          }
+        ]
+      },
+      {
+        "claim": "Flight AA7453 duration is approximately 2 hours 1 minute",
+        "status": "verified",
+        "matches_found": 4,
+        "sample_data": [
+          {
+            "flight_number": "AA7453",
+            "duration_minutes": 119
+          },
+          {
+            "flight_number": "AA7453",
+            "duration_minutes": 114
+          },
+          {
+            "flight_number": "AA7453",
+            "duration_minutes": 128
+          }
+        ]
+      },
+      {
+        "claim": "Total cost for 3 passengers on AA7453 is $181.68",
+        "status": "verified",
+        "matches_found": 1,
+        "sample_data": [
+          {
+            "flight_number": "AA7453",
+            "price": 60.56,
+            "total_price": 181.68
+          }
+        ]
+      },
+      {
+        "claim": "AA5023 flight from Chicago to Denver on April 22, 2026",
+        "status": "verified",
+        "matches_found": 1,
+        "sample_data": [
+          {
+            "flight_number": "AA5023",
+            "airline_name": "American Airlines",
+            "departure_city": "Chicago",
+            "arrival_city": "Denver",
+            "departure_time": "2026-04-22T08:00:00"
+          }
+        ]
+      },
+      {
+        "claim": "AA5023 flight price $86.75 in Economy class",
+        "status": "verified",
+        "matches_found": 1,
+        "sample_data": [
+          {
+            "flight_number": "AA5023",
+            "price": 86.75,
+            "cabin_class": "economy"
+          }
+        ]
+      },
+      {
+        "claim": "AA9443 flight from Chicago to Denver on April 21, 2026",
+        "status": "verified",
+        "matches_found": 1,
+        "sample_data": [
+          {
+            "flight_number": "AA9443",
+            "airline_name": "American Airlines",
+            "departure_city": "Chicago",
+            "arrival_city": "Denver",
+            "departure_time": "2026-04-21T06:22:00"
+          }
+        ]
+      },
+      {
+        "claim": "AA9443 flight price $334.49 in Business class",
+        "status": "verified",
+        "matches_found": 1,
+        "sample_data": [
+          {
+            "flight_number": "AA9443",
+            "price": 334.49,
+            "cabin_class": "business"
+          }
+        ]
+      },
+      {
+        "claim": "AA1938 flight from Chicago to Denver on April 24, 2026",
+        "status": "verified",
+        "matches_found": 1,
+        "sample_data": [
+          {
+            "flight_number": "AA1938",
+            "airline_name": "American Airlines",
+            "departure_city": "Chicago",
+            "arrival_city": "Denver",
+            "departure_time": "2026-04-24T21:37:00"
+          }
+        ]
+      },
+      {
+        "claim": "AA1938 flight price $354.29 in Business class",
+        "status": "verified",
+        "matches_found": 1,
+        "sample_data": [
+          {
+            "flight_number": "AA1938",
+            "price": 354.29,
+            "cabin_class": "business"
+          }
+        ]
+      }
+    ]
+  },
+  "timestamp": "20250912_101816",
+  "mode": "simulation"
+}

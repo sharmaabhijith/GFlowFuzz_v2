@@ -6,7 +6,6 @@ import os
 import sys
 from pathlib import Path
 import yaml
-import logging
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from dotenv import load_dotenv
@@ -21,9 +20,8 @@ sys.path.append(os.path.join(Path(__file__).parent.parent,"verifier"))
 from mcp_client import MCPClient, ToolResult
 from coder.module import SQLCoderAgent
 from verifier.module import BookingVerifierAgent
+from datetime import datetime
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("chat-agent")
 
 @dataclass
 class ChatConfig:
@@ -55,7 +53,15 @@ class FlightBookingChatAgent:
         )
         # Why do we need to send db_path to clinent. Shouldn't access to the server path be enough?
         self.mcp_client = MCPClient(server_path, db_path)
-        self.conversation_history = []
+        self.conversation_history = []  # Keep for backward compatibility
+        
+        # Initialize booking context that will be maintained by LLM
+        self.booking_context = {
+            "summary": "",
+            "current_requirements": {},
+            "search_history": [],
+            "preferences": {}
+        }
         # Initialize OpenAI client for DeepInfra
         self.openai_client = OpenAI(
             api_key=self.config.api_key,
@@ -79,12 +85,12 @@ class FlightBookingChatAgent:
     
     async def initialize(self):
         """Initialize the chat agent and test MCP connection"""
-        logger.info("Testing MCP connection...")
+        # Testing MCP connection...
         connection_ok = await self.mcp_client.test_connection()
         if not connection_ok:
             raise RuntimeError("Failed to connect to MCP server")
         tools = await self.mcp_client.get_available_tools()
-        logger.info(f"Successfully connected to MCP server with {len(tools)} tools")
+        # Successfully connected to MCP server
         return True
         
 
@@ -102,24 +108,93 @@ class FlightBookingChatAgent:
     async def _execute_database_query(self, query: str, params: Optional[List] = None) -> ToolResult:
         """Execute a database query using MCP client"""
         return await self.mcp_client.query_database(query, params)
+    
+    async def _update_booking_context(self, user_message: str) -> None:
+        """Use LLM to automatically extract and maintain booking context"""
+        # Create prompt for LLM to extract booking information
+        extraction_prompt = f"""
+        Based on the user's message and conversation history, extract and update the booking information.
+        
+        Current booking context:
+        {json.dumps(self.booking_context, indent=2)}
+        
+        User's new message: {user_message}
+        
+        Please update the booking context with any new information from the user's message.
+        Extract the following if present:
+        - Departure city/airport
+        - Arrival city/airport
+        - Travel dates
+        - Number of passengers
+        - Class preference (economy/business/first)
+        - Price constraints
+        - Any specific requirements (direct flights, wifi, meals, etc.)
+        
+        Return the updated booking context as a JSON object with these keys:
+        - summary: Brief summary of what the user wants
+        - current_requirements: Dictionary of specific requirements
+        - preferences: User preferences
+        
+        Respond ONLY with the JSON object, no other text.
+        """
+        
+        messages = [
+            {"role": "system", "content": "You are a booking information extractor. Extract and maintain booking context from user messages."},
+            {"role": "user", "content": extraction_prompt}
+        ]
+        
+        # Add recent conversation for context
+        if len(self.conversation_history) > 0:
+            recent_context = "Recent conversation:\n"
+            for msg in self.conversation_history[-5:]:
+                recent_context += f"{msg['role']}: {msg['content']}\n"
+            messages[0]["content"] += "\n\n" + recent_context
+        
+        try:
+            response = await self._call_llm(messages)
+            # Try to parse the response as JSON
+            updated_context = json.loads(response)
+            
+            # Merge with existing context
+            if "summary" in updated_context:
+                self.booking_context["summary"] = updated_context["summary"]
+            if "current_requirements" in updated_context:
+                self.booking_context["current_requirements"].update(updated_context["current_requirements"])
+            if "preferences" in updated_context:
+                self.booking_context["preferences"].update(updated_context["preferences"])
+                
+        except (json.JSONDecodeError, Exception) as e:
+            # If extraction fails, just keep the existing context
+            pass
 
 
     async def _process_user_message(self, user_message: str) -> str:
-        """Process user message and generate response"""
+        """Process user message and generate response with LLM-managed state"""
+        # Update booking context using LLM
+        await self._update_booking_context(user_message)
+        
+        # Add to conversation history
         self.conversation_history.append({"role": "user", "content": user_message})
         
         # Check if this is a flight-related request
         if self._is_flight_related(user_message):
-            return await self._handle_flight_request(user_message)
+            response = await self._handle_flight_request(user_message)
         else:
-            # Regular conversation
+            # Regular conversation with booking context
             messages = [
-                {"role": "system", "content": self.config.system_prompt},
-                *self.conversation_history[-10:]  # Keep last 10 messages for context
+                {"role": "system", "content": self.config.system_prompt + "\n\nCurrent Booking Context: " + json.dumps(self.booking_context, indent=2)},
             ]
+            
+            # Add recent conversation history (last 10 messages)
+            recent_history = self.conversation_history[-10:] if len(self.conversation_history) > 10 else self.conversation_history
+            messages.extend(recent_history)
+            
             response = await self._call_llm(messages)
-            self.conversation_history.append({"role": "assistant", "content": response})
-            return response
+        
+        # Add assistant response to history
+        self.conversation_history.append({"role": "assistant", "content": response})
+        
+        return response
 
     def _is_flight_related(self, text: str) -> bool:
         """Check if the user message is flight-related"""
@@ -129,22 +204,34 @@ class FlightBookingChatAgent:
 
     async def _handle_flight_request(self, user_message: str) -> str:
         """Handle flight-related requests using SQL Coder Agent and MCP queries"""
-        logger.info(f"Generating SQL for: {user_message}")
-        # Pass conversation history to SQL coder for context
-        sql_result = await self.sql_coder.generate_sql_query(user_message, self.conversation_history)
+        # Generating SQL for user message
+        
+        # Create enriched context for SQL coder from booking context
+        enriched_history = []
+        
+        # Add booking context as system message
+        enriched_history.append({
+            "role": "system", 
+            "content": f"Current Booking Information:\n{json.dumps(self.booking_context, indent=2)}"
+        })
+        
+        # Add recent conversation messages
+        recent_history = self.conversation_history[-10:] if len(self.conversation_history) > 10 else self.conversation_history
+        enriched_history.extend(recent_history)
+        
+        # Pass enriched context to SQL coder
+        sql_result = await self.sql_coder.generate_sql_query(user_message, enriched_history)
         
         if not sql_result.get("success"):
-            logger.error(f"SQL generation failed: {sql_result.get('error')}")
             response = "I had trouble understanding your flight search request. Could you please rephrase it with more specific details like departure city, destination, and any dates?"
             self.conversation_history.append({"role": "assistant", "content": response})
             return response
         
         sql_query = sql_result.get("sql_query")
-        logger.info(f"Generated SQL: {sql_query[:100]}...")
+        # Generated SQL query
         result = await self._execute_database_query(sql_query)
         
         if not result.success:
-            logger.error(f"Database query failed: {result.error_message}")
             response = "I encountered an issue while searching for flights. Please try again with different search criteria or check your request details."
             self.conversation_history.append({"role": "assistant", "content": response})
             return response
@@ -152,7 +239,7 @@ class FlightBookingChatAgent:
         # Parse the JSON result from MCP server
         try:
             result_text = result.result.strip()
-            logger.info(f"Raw MCP result: {result_text[:200]}...")
+            # Received MCP result
             
             # The MCP server returns JSON with metadata, extract the results array
             if result_text.startswith('{'):
@@ -185,12 +272,17 @@ class FlightBookingChatAgent:
                 flights_data = []
                 
         except (json.JSONDecodeError, TypeError, AttributeError) as e:
-            logger.error(f"Failed to parse database result: {e}")
-            logger.error(f"Raw result was: {result.result}")
             flights_data = []  # Initialize flights_data to prevent UnboundLocalError
             response = "I encountered an issue while processing the flight data. Let me search for your Toronto to Dubai flight using a different approach."
             self.conversation_history.append({"role": "assistant", "content": response})
             return response
+        
+        # Update booking context with search results
+        self.booking_context["search_history"].append({
+            "query": user_message,
+            "results_count": len(flights_data),
+            "timestamp": datetime.now().isoformat()
+        })
         
         # Check if we got results
         if not flights_data or len(flights_data) == 0:
@@ -200,12 +292,12 @@ class FlightBookingChatAgent:
             response += "\n• Different cabin class (economy, business, or first)?"
             response += "\n• More flexible departure/arrival times?"
             response += "\n\nPlease let me know how you'd like to adjust your search!"
-            self.conversation_history.append({"role": "assistant", "content": response})
+            # No need to add to history here as _process_user_message handles it
             return response
         
         # Format the flight results for the user
         response = await self._format_flight_results(flights_data, user_message)
-        self.conversation_history.append({"role": "assistant", "content": response})
+        # No need to add to history here as _process_user_message handles it
         return response
     
     async def _format_flight_results(self, flights_data: List[Dict], user_query: str) -> str:
@@ -242,16 +334,14 @@ class FlightBookingChatAgent:
                 
                 flights_info += "\n"
             
-            # Use LLM to format this nicely for the user with conversation context
+            # Use LLM to format with booking context
             format_prompt = [
-                {"role": "system", "content": self.config.system_prompt + "\n\nFormat the flight results in a clear, user-friendly way. Include booking instructions and ask if they'd like to book any specific flight. Consider the conversation history to provide contextual responses."}
+                {"role": "system", "content": self.config.system_prompt + "\n\nFormat the flight results in a clear, user-friendly way. Include booking instructions and ask if they'd like to book any specific flight.\n\nCurrent Booking Context: " + json.dumps(self.booking_context, indent=2)}
             ]
             
-            # Add last 10 messages from conversation history for context
-            if self.conversation_history:
-                for msg in self.conversation_history[-10:]:
-                    if msg["role"] in ["user", "assistant"]:
-                        format_prompt.append(msg)
+            # Add recent messages for context
+            recent_history = self.conversation_history[-5:] if len(self.conversation_history) > 5 else self.conversation_history
+            format_prompt.extend(recent_history)
             
             # Add the current request
             format_prompt.append({"role": "user", "content": f"Please format these flight search results nicely:\n\n{flights_info}"})
@@ -260,7 +350,6 @@ class FlightBookingChatAgent:
             return formatted_response
             
         except Exception as e:
-            logger.error(f"Error formatting flight results: {e}")
             return f"Found {len(flights_data)} flights, but encountered an error formatting the results. Please try your search again."
     
     async def chat_loop(self):
@@ -295,7 +384,6 @@ class FlightBookingChatAgent:
                             })
                             
                         except Exception as e:
-                            logger.error(f"Failed to generate summary: {e}")
                             print("\n⚠️ Could not generate booking summary")
                         
                         # Now run verification
@@ -325,7 +413,6 @@ class FlightBookingChatAgent:
                             print(f"📄 Full report saved to: {report_path}")
                             
                         except Exception as e:
-                            logger.error(f"Verification failed: {e}")
                             print(f"\n⚠️ Could not complete verification: {e}")
                     
                     print("\n✈️ Safe travels!")
@@ -340,7 +427,6 @@ class FlightBookingChatAgent:
                 print("\n\n✈️ Chat ended by user. Thank you for using Flight Booking Assistant!")
                 break
             except Exception as e:
-                logger.error(f"Error in chat loop: {e}")
                 print(f"\n❌ Sorry, I encountered an error: {e}")
                 print("Please try again or type 'quit' to exit.")
     
@@ -358,37 +444,35 @@ class FlightBookingChatAgent:
         return False
     
     async def _generate_booking_summary(self) -> str:
-        """Generate a summary of all booking information discussed in the conversation"""
-        # Extract all booking-related messages
-        booking_messages = []
-        for message in self.conversation_history:
-            content = message["content"].lower()
-            if any(keyword in content for keyword in ['flight', 'book', 'price', '$', 'departure', 'arrival']):
-                booking_messages.append(f"{message['role'].upper()}: {message['content']}")
-        
-        if not booking_messages:
-            return "No booking information was discussed in this conversation."
-        
-        # Use LLM to generate a comprehensive summary
+        """Generate a precise summary of final booking information only"""
+        # Use the maintained booking context and conversation history
         summary_prompt = f"""
-        Based on the following conversation about flight bookings, create a comprehensive summary of all booking information discussed.
-        Include:
-        - Flight numbers mentioned
-        - Routes (departure and arrival cities)
-        - Dates and times
-        - Prices
-        - Class of service
-        - Number of seats
-        - Any special requirements or preferences
+        Based on the booking context, provide ONLY the final booking information.
         
-        Conversation excerpts:
-        {chr(10).join(booking_messages[-10:])}  # Last 10 relevant messages
+        Current Booking Context:
+        {json.dumps(self.booking_context, indent=2)}
         
-        Provide a clear, structured summary of the booking information.
+        Create a BRIEF summary with ONLY these details (if available):
+        • Origin: [city]
+        • Destination: [city]
+        • Date: [date]
+        • Passengers: [number]
+        • Class: [class type]
+        • Selected Flight: [flight number if chosen]
+        • Price: [amount if available]
+        
+        ONLY include information that was actually discussed. Do NOT include:
+        - Search history
+        - User preferences discussion
+        - Multiple options presented
+        - Conversation details
+        - Any explanations or narrative
+        
+        Keep it extremely concise - just the final booking facts.
         """
         
         messages = [
-            {"role": "system", "content": "You are a booking summary assistant. Create clear, concise summaries of flight booking information."},
+            {"role": "system", "content": "You are a booking summary assistant. Extract ONLY the final booking information. Be extremely concise and factual. No explanations, just booking details."},
             {"role": "user", "content": summary_prompt}
         ]
         
@@ -396,5 +480,4 @@ class FlightBookingChatAgent:
             summary = await self._call_llm(messages)
             return summary
         except Exception as e:
-            logger.error(f"Failed to generate booking summary: {e}")
             return "Unable to generate booking summary due to an error."

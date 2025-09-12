@@ -4,15 +4,11 @@ import os
 import sys
 from pathlib import Path
 import yaml
-import logging
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from dotenv import load_dotenv
 from openai import OpenAI
 import re
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("sql-coder-agent")
 
 @dataclass
 class CoderConfig:
@@ -49,7 +45,6 @@ class SQLCoderAgent:
             api_key=self.config.api_key,
             base_url=self.config.api_base_url
         )
-        logger.info("Successfully loaded SQL Coder configuration")
 
     def _clean_sql_query(self, raw_sql: str) -> str:
         """Clean and format the SQL query"""
@@ -64,17 +59,13 @@ class SQLCoderAgent:
         sql_lower = sql_query.lower()
         dangerous_keywords = ['insert', 'update', 'delete', 'drop', 'create', 'alter', 'truncate']
         if any(keyword in sql_lower for keyword in dangerous_keywords):
-            logger.warning("SQL contains dangerous operations")
             return False
         if not sql_lower.strip().startswith('select'):
-            logger.warning("SQL is not a SELECT query")
             return False
         required_elements = ['from flights f', 'join cities']
         if not all(element in sql_lower for element in required_elements):
-            logger.warning("SQL missing required elements")
             return False
         if sql_lower.count('select') > 1 and 'union' not in sql_lower:
-            logger.warning("Multiple SELECT statements without UNION")
             return False
         return True
 
@@ -135,13 +126,11 @@ class SQLCoderAgent:
         sql_query = self._clean_sql_query(response)
         
         if self._validate_sql_query(sql_query):
-            logger.info(f"Generated SQL: {sql_query[:100]}...")
             return {
                 "sql_query": sql_query,
                 "success": True
             }
         else:
-            logger.error(f"Invalid SQL generated: {sql_query}")
             return {
                 "sql_query": None,
                 "success": False,

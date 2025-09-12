@@ -6,15 +6,11 @@ import json
 import re
 from pathlib import Path
 import yaml
-import logging
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 from dotenv import load_dotenv
 from openai import OpenAI
 from datetime import datetime
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("verifier-agent")
 
 @dataclass
 class VerifierConfig:
@@ -63,7 +59,6 @@ class BookingVerifierAgent:
             base_url=self.config.api_base_url
         )
         
-        logger.info("Successfully loaded Booking Verifier configuration")
     
     def _extract_booking_claims(self, conversation_history: List[Dict[str, str]]) -> str:
         """Extract all booking-related claims from conversation history"""
@@ -102,8 +97,6 @@ class BookingVerifierAgent:
                 queries = json.loads(llm_response)
                 return queries if isinstance(queries, list) else []
         except (json.JSONDecodeError, AttributeError) as e:
-            logger.error(f"Failed to parse verification queries: {e}")
-            logger.error(f"Raw response: {llm_response}")
             return []
     
     def _clean_sql_query(self, query: str) -> str:
@@ -128,7 +121,6 @@ class BookingVerifierAgent:
         booking_claims = self._extract_booking_claims(conversation_history)
         
         if not booking_claims:
-            logger.info("No booking claims found in conversation")
             return []
         
         prompt = f"""
@@ -155,7 +147,6 @@ class BookingVerifierAgent:
             if 'query' in query_dict:
                 query_dict['query'] = self._clean_sql_query(query_dict['query'])
         
-        logger.info(f"Generated {len(queries)} verification queries")
         return queries
     
     async def verify_bookings(self, conversation_history: List[Dict[str, str]], mcp_client) -> Dict[str, Any]:
@@ -169,7 +160,6 @@ class BookingVerifierAgent:
         Returns:
             Verification report with results
         """
-        logger.info("Starting booking verification process...")
         
         # Generate verification queries
         verification_queries = await self.generate_verification_queries(conversation_history)
@@ -189,9 +179,6 @@ class BookingVerifierAgent:
             
             if not query:
                 continue
-            
-            logger.info(f"Verifying claim: {claim}")
-            logger.info(f"Query: {query[:100]}...")
             
             # Execute verification query
             result = await mcp_client.query_database(query)
@@ -231,7 +218,6 @@ class BookingVerifierAgent:
                     })
                     
             except (json.JSONDecodeError, TypeError) as e:
-                logger.error(f"Failed to parse verification result: {e}")
                 verification_results.append({
                     "claim": claim,
                     "status": "error",
