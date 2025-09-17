@@ -113,40 +113,40 @@ class BookingVerifierAgent:
     async def generate_verification_queries(self, conversation_history: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """
         Generate SQL queries to verify booking claims from conversation
-        
+
         Returns:
             List of dicts with 'claim' and 'query' keys
         """
         # Extract booking claims from conversation
         booking_claims = self._extract_booking_claims(conversation_history)
-        
+
         if not booking_claims:
             return []
-        
+
         prompt = f"""
         Analyze the following booking claims from a flight booking conversation and generate SQL queries to verify each claim:
-        
+
         BOOKING CLAIMS:
         {booking_claims}
-        
+
         Generate verification queries for EACH specific claim (flight numbers, dates, prices, routes).
         Return as JSON array with format: [{{"claim": "description", "query": "SQL query"}}]
         """
-        
+
         messages = [
             {"role": "system", "content": self.config.system_prompt},
             {"role": "user", "content": prompt}
         ]
-        
+
         # Generate verification queries using LLM
         response = await self._call_llm(messages)
         queries = self._parse_verification_queries(response)
-        
+
         # Clean each query
         for query_dict in queries:
             if 'query' in query_dict:
                 query_dict['query'] = self._clean_sql_query(query_dict['query'])
-        
+
         return queries
     
     async def verify_bookings(self, conversation_history: List[Dict[str, str]], mcp_client) -> Dict[str, Any]:

@@ -1,0 +1,28 @@
+model_name: "microsoft/DialoGPT-medium"
+tokenizer_name: "microsoft/DialoGPT-medium"
+max_length: 50
+temperature: 0.8
+top_p: 0.9
+do_sample: true
+pad_token_id: 50256
+eos_token_id: 50256
+device: "cuda"
+
+# Training configuration
+training:
+  learning_rate: 1e-5
+  batch_size: 8
+  max_epochs: 10
+  gradient_accumulation_steps: 4
+  warmup_steps: 100
+  weight_decay: 0.01
+  save_steps: 500
+  eval_steps: 100
+  logging_steps: 50
+
+# Alternative models (uncomment to use)
+# model_name: "gpt2"
+# tokenizer_name: "gpt2"
+
+# model_name: "facebook/blenderbot-400M-distill"
+# tokenizer_name: "facebook/blenderbot-400M-distill"

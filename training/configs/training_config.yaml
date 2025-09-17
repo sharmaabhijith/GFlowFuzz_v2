@@ -1,0 +1,78 @@
+# Simplified Training Configuration
+# Minimal configuration for error-free PPO training
+
+# Environment Configuration
+environment:
+  max_conversation_length: 8
+  booking_agent_config:
+    config_path: "agents/chat/config.yaml"
+    db_path: "database/flights.db"
+    server_path: "mcp-server/database_server.py"
+  verifier_config:
+    config_path: "agents/verifier/config.yaml"
+
+# Model Configuration
+model:
+  base_model: "gpt2"  # Simple, reliable model
+  tokenizer: "gpt2"
+  max_response_length: 30
+  device: "auto"  # Auto-detect cuda/cpu
+
+# PPO Training Configuration (Simplified)
+ppo:
+  # Basic training parameters
+  learning_rate: 1e-4
+  batch_size: 4
+  mini_batch_size: 2
+
+  # Reduced training scale for stability
+  max_epochs: 5
+  max_conversations_per_epoch: 20
+
+  # PPO hyperparameters (conservative)
+  ppo_epochs: 2
+  gamma: 0.99
+  lam: 0.95
+  cliprange: 0.2
+  vf_coef: 0.1
+  ent_coef: 0.01
+  max_grad_norm: 0.5  # Reduced for stability
+
+  # Evaluation and saving
+  save_freq: 2
+  eval_freq: 1
+  logging_steps: 5
+
+  # Output directory
+  output_dir: "./ppo_training_output"
+
+# Reward System Configuration (Simplified)
+reward_system:
+  # Simple reward weights
+  completion_weight: 1.0
+  naturalness_weight: 0.2
+  length_weight: 0.1
+
+  # Length preferences
+  min_conversation_length: 2
+  max_conversation_length: 8
+  optimal_length_range: [3, 6]
+
+# Logging Configuration (Minimal)
+logging:
+  level: "INFO"
+  save_conversations: false  # Disabled for simplicity
+  save_verification_reports: false  # Disabled for simplicity
+
+# Evaluation Configuration (Minimal)
+evaluation:
+  num_eval_conversations: 3
+  eval_objectives:
+    - "I need to fly from New York to London"
+    - "Looking for a ticket to Paris"
+    - "Book a flight to Tokyo"
+
+# Hardware Configuration (Conservative)
+hardware:
+  use_mixed_precision: false  # Disabled for stability
+  gradient_checkpointing: false  # Disabled for simplicity

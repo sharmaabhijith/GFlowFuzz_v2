@@ -1,8 +1,39 @@
+# GFlowFuzz_v2 - Complete Requirements
+# Includes both base application and PPO training dependencies
+
+# === BASE APPLICATION DEPENDENCIES ===
+# MCP and API clients
 mcp>=1.0.0
 httpx>=0.24.0
-pydantic>=2.0.0
-asyncio-compat>=0.1.2
+openai>=1.0.0
+requests>=2.31.0
+
+# Configuration and utilities
 python-dotenv>=1.0.0
 pyyaml>=6.0.0
-requests>=2.31.0
-openai>=1.0.0
+pydantic>=2.0.0
+asyncio-compat>=0.1.2
+
+# Rich UI for terminal interface
+rich>=13.0.0
+
+# === PPO TRAINING DEPENDENCIES ===
+# Core ML libraries
+torch>=2.0.0
+transformers>=4.30.0
+numpy>=1.24.0
+
+# PPO training with HuggingFace TRL
+trl>=0.7.0
+
+# Progress tracking
+tqdm>=4.65.0
+
+# Data processing
+datasets>=2.14.0
+
+# Optional accelerate for distributed training
+accelerate>=0.21.0
+
+# Development and debugging
+tensorboard>=2.13.0

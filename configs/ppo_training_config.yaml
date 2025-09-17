@@ -1,0 +1,101 @@
+# Professional PPO Training Configuration for Auto User Agent
+# This configuration enables fine-tuning of the auto user agent using reinforcement learning
+# with verifier-based rewards for accurate booking conversation generation.
+
+# ============================================================================
+# MODEL CONFIGURATION
+# ============================================================================
+# Base language model settings
+model_name: "gpt2"                           # HuggingFace model identifier
+tokenizer_name: "gpt2"                       # Tokenizer (usually same as model)
+load_from_checkpoint: null                   # Path to checkpoint to resume from
+
+# ============================================================================
+# PPO HYPERPARAMETERS
+# ============================================================================
+# Core reinforcement learning parameters for PPO algorithm
+learning_rate: 1e-4                          # Learning rate for policy optimization
+batch_size: 4                                # Number of conversations per training batch
+mini_batch_size: 2                           # Mini-batch size for PPO updates
+ppo_epochs: 2                                # Number of PPO epochs per batch
+gamma: 0.99                                  # Discount factor for future rewards
+lam: 0.95                                    # GAE lambda for advantage estimation
+cliprange: 0.2                               # PPO clipping parameter
+vf_coef: 0.1                                 # Value function loss coefficient
+ent_coef: 0.01                               # Entropy loss coefficient (exploration)
+max_grad_norm: 0.5                           # Gradient clipping threshold
+
+# ============================================================================
+# TRAINING SCHEDULE
+# ============================================================================
+# Training duration and evaluation frequency
+max_epochs: 10                               # Total number of training epochs
+conversations_per_epoch: 20                  # Conversations collected per epoch
+eval_conversations: 5                        # Conversations for evaluation
+save_frequency: 2                            # Save checkpoint every N epochs
+eval_frequency: 1                            # Evaluate every N epochs
+
+# ============================================================================
+# ENVIRONMENT CONFIGURATION
+# ============================================================================
+# Booking conversation environment settings
+max_conversation_turns: 8                    # Maximum turns per conversation
+max_response_length: 30                      # Maximum tokens per user response
+max_context_length: 256                      # Maximum context tokens for input
+
+# ============================================================================
+# REWARD SYSTEM CONFIGURATION
+# ============================================================================
+# Verifier-based reward system for accurate information
+use_verifier_rewards: true                   # Enable verifier agent rewards
+reward_scale: 1.0                            # Global reward scaling factor
+hallucination_penalty: -1.0                  # Penalty for hallucinated information
+verification_bonus: 1.0                      # Bonus for verified information
+
+# ============================================================================
+# FILE PATHS
+# ============================================================================
+# Paths to required models, databases, and configuration files
+output_dir: "./ppo_training_output"          # Training output directory
+verifier_config_path: "./configs/verifier_config.yaml"  # Verifier agent config
+booking_agent_config_path: "./agents/chat/config.yaml"  # Booking agent config
+db_path: "./flight_booking.db"               # Flight database path
+server_path: "./mcp-server.py"               # MCP server script
+
+# ============================================================================
+# LOGGING AND MONITORING
+# ============================================================================
+# Output and tracking configuration
+log_level: "INFO"                            # Logging level (DEBUG, INFO, WARNING, ERROR)
+log_interval: 5                              # Log every N training steps
+save_conversation_logs: true                 # Save detailed conversation logs
+track_verification_stats: true               # Track verification statistics
+
+# ============================================================================
+# PERFORMANCE OPTIMIZATION
+# ============================================================================
+# Memory and computation optimization settings
+gradient_accumulation_steps: 1               # Gradient accumulation for larger effective batches
+mixed_precision: false                       # Enable mixed precision training (requires CUDA)
+dataloader_num_workers: 0                    # Number of workers for data loading
+
+# ============================================================================
+# NOTES
+# ============================================================================
+# 1. Verifier Rewards: The system uses binary rewards (1.0 for verified, 0.0 for hallucinated)
+#    based on database verification of booking claims made during conversations.
+#
+# 2. Environment Integration: Training occurs in the BookingConversationEnvironment which
+#    simulates realistic booking interactions with the flight booking chat agent.
+#
+# 3. Checkpointing: Models are automatically saved at specified intervals and the best
+#    performing model (based on evaluation reward) is saved separately.
+#
+# 4. Evaluation: Regular evaluation ensures training progress and helps detect overfitting.
+#    Evaluation uses the same environment but with the model in eval mode.
+#
+# 5. Performance: For faster training on limited hardware, reduce batch_size,
+#    conversations_per_epoch, or max_conversation_turns.
+#
+# 6. Model Selection: Start with smaller models like "gpt2" for experimentation.
+#    For production, consider "microsoft/DialoGPT-medium" or similar conversation models.
