@@ -1,10 +1,27 @@
 #!/usr/bin/env python3
 
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+project_root = Path(__file__).parent.parent.parent
+env_path = project_root / '.env'
+load_dotenv(env_path)
+
+# Set HuggingFace cache directory from .env or use default
+user_cache = os.environ.get("HF_HOME", os.path.expanduser("~/hf_cache"))
+os.makedirs(os.path.join(user_cache, "hub"), exist_ok=True)
+os.makedirs(os.path.join(user_cache, "datasets"), exist_ok=True)
+
+# Set XET cache to avoid permission issues
+xet_cache = os.environ.get("XET_CACHE_DIR", os.path.join(user_cache, "xet"))
+os.environ["XET_CACHE_DIR"] = xet_cache
+os.makedirs(xet_cache, exist_ok=True)
+
 import asyncio
 import torch
 import numpy as np
-from pathlib import Path
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -18,12 +35,17 @@ sys.path.append(str(Path(__file__).parent.parent.parent / "training"))
 @dataclass
 class AutoUserConfig:
     """Simplified configuration for the auto user agent"""
-    model_name: str = "gpt2"
-    tokenizer_name: str = "gpt2"
+    model_name: str
+    tokenizer_name: Optional[str] = None
     max_length: int = 30
     temperature: float = 0.7
     do_sample: bool = True
     device: str = "auto"
+
+    def __post_init__(self):
+        # Use model_name as tokenizer_name if not specified
+        if self.tokenizer_name is None:
+            self.tokenizer_name = self.model_name
 
 class AutoUserAgent:
     """
@@ -51,22 +73,25 @@ class AutoUserAgent:
             model_path: Path to a saved model, if None uses base model
             use_value_head: Whether to use model with value head for PPO
         """
+        # Use custom cache directory
+        cache_dir = os.path.join(os.environ.get("HF_HOME", os.path.expanduser("~/hf_cache")), "hub")
+
         if model_path:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, cache_dir=cache_dir)
         else:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.config.tokenizer_name)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.config.tokenizer_name, cache_dir=cache_dir)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         if model_path:
             if use_value_head:
-                self.model = AutoModelForCausalLMWithValueHead.from_pretrained(model_path)
+                self.model = AutoModelForCausalLMWithValueHead.from_pretrained(model_path, cache_dir=cache_dir)
             else:
-                self.model = AutoModelForCausalLM.from_pretrained(model_path)
+                self.model = AutoModelForCausalLM.from_pretrained(model_path, cache_dir=cache_dir)
         else:
             if use_value_head:
-                self.model = AutoModelForCausalLMWithValueHead.from_pretrained(self.config.model_name)
+                self.model = AutoModelForCausalLMWithValueHead.from_pretrained(self.config.model_name, cache_dir=cache_dir)
             else:
-                self.model = AutoModelForCausalLM.from_pretrained(self.config.model_name)
+                self.model = AutoModelForCausalLM.from_pretrained(self.config.model_name, cache_dir=cache_dir)
 
         # Move to device
         self.model.to(self.device)
@@ -163,11 +188,14 @@ class AutoUserAgent:
 
     def load_model(self, model_path: str, use_value_head: bool = False):
         """Load a trained model"""
+        # Use custom cache directory
+        cache_dir = os.path.join(os.environ.get("HF_HOME", os.path.expanduser("~/hf_cache")), "hub")
+
         if use_value_head:
-            self.model = AutoModelForCausalLMWithValueHead.from_pretrained(model_path)
+            self.model = AutoModelForCausalLMWithValueHead.from_pretrained(model_path, cache_dir=cache_dir)
         else:
-            self.model = AutoModelForCausalLM.from_pretrained(model_path)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+            self.model = AutoModelForCausalLM.from_pretrained(model_path, cache_dir=cache_dir)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path, cache_dir=cache_dir)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 

@@ -1,101 +1,105 @@
-# Professional PPO Training Configuration for Auto User Agent
-# This configuration enables fine-tuning of the auto user agent using reinforcement learning
-# with verifier-based rewards for accurate booking conversation generation.
+# PPO Training Configuration for Auto User Agent
 
-# ============================================================================
-# MODEL CONFIGURATION
-# ============================================================================
-# Base language model settings
-model_name: "gpt2"                           # HuggingFace model identifier
-tokenizer_name: "gpt2"                       # Tokenizer (usually same as model)
-load_from_checkpoint: null                   # Path to checkpoint to resume from
+# Environment settings
+environment:
+  max_conversation_length: 10
+  booking_agent_config:
+    config_path: "agents/chat/config.yaml"
+    db_path: "database/flights.db"
+    server_path: "mcp-server/database_server.py"
+  verifier_config:
+    config_path: "agents/verifier/config.yaml"
 
-# ============================================================================
-# PPO HYPERPARAMETERS
-# ============================================================================
-# Core reinforcement learning parameters for PPO algorithm
-learning_rate: 1e-4                          # Learning rate for policy optimization
-batch_size: 4                                # Number of conversations per training batch
-mini_batch_size: 2                           # Mini-batch size for PPO updates
-ppo_epochs: 2                                # Number of PPO epochs per batch
-gamma: 0.99                                  # Discount factor for future rewards
-lam: 0.95                                    # GAE lambda for advantage estimation
-cliprange: 0.2                               # PPO clipping parameter
-vf_coef: 0.1                                 # Value function loss coefficient
-ent_coef: 0.01                               # Entropy loss coefficient (exploration)
-max_grad_norm: 0.5                           # Gradient clipping threshold
+# Model configuration
+model:
+  base_model: "microsoft/DialoGPT-small"  # Smaller model for faster training
+  tokenizer: "microsoft/DialoGPT-small"
+  max_response_length: 30
+  device: "auto"
 
-# ============================================================================
-# TRAINING SCHEDULE
-# ============================================================================
-# Training duration and evaluation frequency
-max_epochs: 10                               # Total number of training epochs
-conversations_per_epoch: 20                  # Conversations collected per epoch
-eval_conversations: 5                        # Conversations for evaluation
-save_frequency: 2                            # Save checkpoint every N epochs
-eval_frequency: 1                            # Evaluate every N epochs
+  # Quantization settings
+  use_quantization: true
+  quantization_bits: 4
 
-# ============================================================================
-# ENVIRONMENT CONFIGURATION
-# ============================================================================
-# Booking conversation environment settings
-max_conversation_turns: 8                    # Maximum turns per conversation
-max_response_length: 30                      # Maximum tokens per user response
-max_context_length: 256                      # Maximum context tokens for input
+  # LoRA settings
+  use_lora: true
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
 
-# ============================================================================
-# REWARD SYSTEM CONFIGURATION
-# ============================================================================
-# Verifier-based reward system for accurate information
-use_verifier_rewards: true                   # Enable verifier agent rewards
-reward_scale: 1.0                            # Global reward scaling factor
-hallucination_penalty: -1.0                  # Penalty for hallucinated information
-verification_bonus: 1.0                      # Bonus for verified information
+# PPO training hyperparameters
+ppo:
+  # Basic training
+  learning_rate: 1.0e-5
+  batch_size: 8
+  mini_batch_size: 4
+  gradient_accumulation_steps: 1
 
-# ============================================================================
-# FILE PATHS
-# ============================================================================
-# Paths to required models, databases, and configuration files
-output_dir: "./ppo_training_output"          # Training output directory
-verifier_config_path: "./configs/verifier_config.yaml"  # Verifier agent config
-booking_agent_config_path: "./agents/chat/config.yaml"  # Booking agent config
-db_path: "./flight_booking.db"               # Flight database path
-server_path: "./mcp-server.py"               # MCP server script
+  # Training scale
+  max_epochs: 10
+  rollout_episodes: 5  # Episodes per epoch
 
-# ============================================================================
-# LOGGING AND MONITORING
-# ============================================================================
-# Output and tracking configuration
-log_level: "INFO"                            # Logging level (DEBUG, INFO, WARNING, ERROR)
-log_interval: 5                              # Log every N training steps
-save_conversation_logs: true                 # Save detailed conversation logs
-track_verification_stats: true               # Track verification statistics
+  # PPO specific
+  ppo_epochs: 4
+  gamma: 0.99
+  lam: 0.95
+  cliprange: 0.2
+  cliprange_value: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  max_grad_norm: 0.5
 
-# ============================================================================
-# PERFORMANCE OPTIMIZATION
-# ============================================================================
-# Memory and computation optimization settings
-gradient_accumulation_steps: 1               # Gradient accumulation for larger effective batches
-mixed_precision: false                       # Enable mixed precision training (requires CUDA)
-dataloader_num_workers: 0                    # Number of workers for data loading
+  # Buffer settings
+  use_buffer: true
+  buffer_ratio: 0.3  # Ratio of buffer data to use
+  adversarial_ratio: 0.3  # Ratio of adversarial examples in buffer
+  buffer_size: 10000
 
-# ============================================================================
-# NOTES
-# ============================================================================
-# 1. Verifier Rewards: The system uses binary rewards (1.0 for verified, 0.0 for hallucinated)
-#    based on database verification of booking claims made during conversations.
-#
-# 2. Environment Integration: Training occurs in the BookingConversationEnvironment which
-#    simulates realistic booking interactions with the flight booking chat agent.
-#
-# 3. Checkpointing: Models are automatically saved at specified intervals and the best
-#    performing model (based on evaluation reward) is saved separately.
-#
-# 4. Evaluation: Regular evaluation ensures training progress and helps detect overfitting.
-#    Evaluation uses the same environment but with the model in eval mode.
-#
-# 5. Performance: For faster training on limited hardware, reduce batch_size,
-#    conversations_per_epoch, or max_conversation_turns.
-#
-# 6. Model Selection: Start with smaller models like "gpt2" for experimentation.
-#    For production, consider "microsoft/DialoGPT-medium" or similar conversation models.
+  # Checkpointing
+  save_freq: 2
+  eval_freq: 1
+  logging_steps: 10
+  output_dir: "./ppo_training_output"
+
+# Reward configuration
+reward_system:
+  # Reward weights
+  verifier_weight: 0.7
+  immediate_weight: 0.3
+
+  # Length preferences
+  min_response_length: 3
+  max_response_length: 30
+  optimal_length_range: [5, 20]
+
+  # Penalties and bonuses
+  too_short_penalty: -0.2
+  too_long_penalty: -0.3
+  natural_response_bonus: 0.2
+  polite_ending_bonus: 0.3
+  progress_reward: 0.05
+
+# Evaluation settings
+evaluation:
+  num_eval_episodes: 5
+  eval_objectives:
+    - "I need to fly from New York to London in June 2026"
+    - "Looking for business class tickets to Tokyo"
+    - "Can you help me book a flight to Paris for 2 people?"
+    - "I want to find the cheapest flight to Sydney"
+    - "Need a direct flight from Chicago to Dubai next month"
+
+# Logging configuration
+logging:
+  level: "INFO"
+  log_dir: "./logs"
+  tensorboard_dir: "./tensorboard_logs"
+  save_conversations: true
+  save_verification_reports: true
+
+# Hardware optimization
+hardware:
+  mixed_precision: false  # Set to true if GPU supports it
+  gradient_checkpointing: false
+  num_workers: 2
