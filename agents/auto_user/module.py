@@ -1,317 +1,127 @@
 #!/usr/bin/env python3
 
-import os
-from pathlib import Path
-from dotenv import load_dotenv
+"""
+Stateless AutoUser Agent - Pure Policy Implementation
+Acts as a pure function mapping states to actions without maintaining any internal state.
+"""
 
-# Load environment variables from .env file
-project_root = Path(__file__).parent.parent.parent
-env_path = project_root / '.env'
-load_dotenv(env_path)
-
-# Set HuggingFace cache directory from .env or use default
-user_cache = os.environ.get("HF_HOME", os.path.expanduser("~/hf_cache"))
-os.makedirs(os.path.join(user_cache, "hub"), exist_ok=True)
-os.makedirs(os.path.join(user_cache, "datasets"), exist_ok=True)
-
-# Set XET cache to avoid permission issues
-xet_cache = os.environ.get("XET_CACHE_DIR", os.path.join(user_cache, "xet"))
-os.environ["XET_CACHE_DIR"] = xet_cache
-os.makedirs(xet_cache, exist_ok=True)
-
-import asyncio
 import torch
-import numpy as np
-from typing import Dict, List, Any, Optional
-from dataclasses import dataclass
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from trl import AutoModelForCausalLMWithValueHead
+from typing import Optional
+from dataclasses import dataclass
+import logging
 
-# Add parent directories to path for imports
-import sys
-sys.path.append(str(Path(__file__).parent.parent.parent))
-sys.path.append(str(Path(__file__).parent.parent.parent / "training"))
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class AutoUserConfig:
-    """Simplified configuration for the auto user agent"""
+    """Configuration for the AutoUser agent"""
     model_name: str
-    tokenizer_name: Optional[str] = None
-    max_length: int = 30
-    temperature: float = 0.7
-    do_sample: bool = True
-    device: str = "auto"
+    tokenizer_name: Optional[str]
+    max_length: int
+    temperature: float
+    top_p: float
+    do_sample: bool
+    device: str
 
-    def __post_init__(self):
-        # Use model_name as tokenizer_name if not specified
-        if self.tokenizer_name is None:
-            self.tokenizer_name = self.model_name
 
 class AutoUserAgent:
     """
-    Simplified trainable user agent for PPO training.
-    Compatible with HuggingFace TRL PPO trainer.
+    Stateless AutoUser Agent - Pure Policy Function
+
+    This agent acts as a pure function π(s) → a, mapping states to actions
+    without maintaining any internal conversation state.
+
+    All conversation context must be provided in the state string from the environment.
     """
 
     def __init__(self, config: AutoUserConfig):
-        """Initialize the auto user agent"""
+        """
+        Initialize the stateless agent with model and tokenizer only.
+        No conversation state is maintained.
+
+        Args:
+            config: Configuration for the agent
+        """
         self.config = config
-        if config.device == "auto":
+        self.model = None
+        self.tokenizer = None
+        self.device = None
+
+    def initialize_model(self):
+        """Load the model and tokenizer"""
+        # Determine device
+        if self.config.device == "auto":
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
-            self.device = torch.device(config.device)
-        self.tokenizer = None
-        self.model = None
-        self.conversation_history: List[Dict[str, str]] = []
-        self.booking_objective: str = ""
-
-    def initialize_model(self, model_path: Optional[str] = None, use_value_head: bool = False):
-        """
-        Initialize the language model
-
-        Args:
-            model_path: Path to a saved model, if None uses base model
-            use_value_head: Whether to use model with value head for PPO
-        """
-        # Use custom cache directory
-        cache_dir = os.path.join(os.environ.get("HF_HOME", os.path.expanduser("~/hf_cache")), "hub")
-
-        if model_path:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_path, cache_dir=cache_dir)
-        else:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.config.tokenizer_name, cache_dir=cache_dir)
+            self.device = torch.device(self.config.device)
+        # Load tokenizer
+        tokenizer_name = self.config.tokenizer_name or self.config.model_name
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        # Add padding token if not present
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-        if model_path:
-            if use_value_head:
-                self.model = AutoModelForCausalLMWithValueHead.from_pretrained(model_path, cache_dir=cache_dir)
-            else:
-                self.model = AutoModelForCausalLM.from_pretrained(model_path, cache_dir=cache_dir)
-        else:
-            if use_value_head:
-                self.model = AutoModelForCausalLMWithValueHead.from_pretrained(self.config.model_name, cache_dir=cache_dir)
-            else:
-                self.model = AutoModelForCausalLM.from_pretrained(self.config.model_name, cache_dir=cache_dir)
+        # Load model
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.config.model_name,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+        ).to(self.device)
+        self.model.eval()
 
-        # Move to device
-        self.model.to(self.device)
-
-    def set_training_mode(self, training: bool = True):
-        """Set the model to training or evaluation mode"""
-        if self.model:
-            self.model.train(training)
-
-    def reset_conversation(self, booking_objective: str):
-        """Reset for a new conversation"""
-        self.conversation_history = []
-        self.booking_objective = booking_objective
-
-    def update_conversation_history(self, role: str, message: str):
-        """Update conversation history"""
-        self.conversation_history.append({"role": role, "content": message})
-
-    def get_conversation_context(self) -> str:
-        """Get formatted conversation context"""
-        context_parts = [f"Objective: {self.booking_objective}"]
-        recent_history = self.conversation_history[-100:] if len(self.conversation_history) > 100 else self.conversation_history
-        for msg in recent_history:
-            role = "User" if msg["role"] == "user" else "Agent"
-            context_parts.append(f"{role}: {msg['content']}")
-
-        context_parts.append("User:")
-        return "\n".join(context_parts)
-
-    async def generate_response(self,
-                              assistant_message: Optional[str] = None,
-                              context: Optional[str] = None) -> str:
+    async def get_action(self, state: str) -> str:
         """
-        Generate a user response
-
-        Args:
-            assistant_message: Latest message from assistant (if any)
-            context: Optional context override
-
         Returns:
-            Generated user response
+            Generated user response (action)
         """
-        # Update conversation if assistant message provided
-        if assistant_message:
-            self.update_conversation_history("assistant", assistant_message)
-        if context is None:
-            context = self.get_conversation_context()
+        if self.model is None:
+            raise RuntimeError("Model not initialized. Call initialize_model() first.")
+
+        # Tokenize the complete state
         inputs = self.tokenizer.encode(
-            context,
+            state,
             return_tensors="pt",
-            max_length=256,
+            max_length=512,  # Larger context window for full state
             truncation=True,
             padding=True
         ).to(self.device)
+
+        # Generate response
         with torch.no_grad():
             outputs = self.model.generate(
                 inputs,
                 max_new_tokens=self.config.max_length,
                 temperature=self.config.temperature,
+                top_p=self.config.top_p,
                 do_sample=self.config.do_sample,
                 pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
                 attention_mask=inputs.ne(self.tokenizer.pad_token_id)
             )
-        user_response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        self.update_conversation_history("user", user_response)
-        return user_response
 
-    def get_model_logits(self, text: str) -> torch.Tensor:
-        """
-        Get model logits for given text
+        # Decode only the generated part
+        generated_tokens = outputs[0][inputs.shape[-1]:]
+        response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
-        Args:
-            text: Input text
+        # Clean up response
+        response = response.strip()
 
-        Returns:
-            Model logits
-        """
-        inputs = self.tokenizer.encode(
-            text,
-            return_tensors="pt",
-            max_length=256,
-            truncation=True
-        ).to(self.device)
-        with torch.no_grad():
-            outputs = self.model(inputs)
-            return outputs.logits
+        # Remove any "User:" or "Agent:" prefixes if accidentally generated
+        if response.startswith("User:"):
+            response = response[5:].strip()
+        if response.startswith("Agent:"):
+            response = response[6:].strip()
 
-    def save_model(self, save_path: str):
-        """Save the trained model"""
-        os.makedirs(save_path, exist_ok=True)
-        self.model.save_pretrained(save_path)
-        self.tokenizer.save_pretrained(save_path)
+        return response
 
-    def load_model(self, model_path: str, use_value_head: bool = False):
-        """Load a trained model"""
-        # Use custom cache directory
-        cache_dir = os.path.join(os.environ.get("HF_HOME", os.path.expanduser("~/hf_cache")), "hub")
+    def get_model_info(self) -> dict:
+        """Get information about the loaded model"""
+        if self.model is None:
+            return {"status": "not_initialized"}
 
-        if use_value_head:
-            self.model = AutoModelForCausalLMWithValueHead.from_pretrained(model_path, cache_dir=cache_dir)
-        else:
-            self.model = AutoModelForCausalLM.from_pretrained(model_path, cache_dir=cache_dir)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path, cache_dir=cache_dir)
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        self.model.to(self.device)
-
-    def get_parameters(self):
-        """Get model parameters for optimization"""
-        if self.model:
-            return self.model.parameters()
-        return []
-
-    def prepare_training_data(self, conversations: List[Dict[str, Any]]) -> Dict[str, List]:
-        """
-        Prepare conversation data for training (simplified)
-
-        Args:
-            conversations: List of conversation dictionaries
-
-        Returns:
-            Prepared training data
-        """
-        states = []
-        actions = []
-        rewards = []
-        for conv in conversations:
-            conv_states = conv.get('states', [])
-            conv_actions = conv.get('actions', [])
-            conv_rewards = conv.get('rewards', [])
-            states.extend(conv_states)
-            actions.extend(conv_actions)
-            rewards.extend(conv_rewards)
         return {
-            'states': states,
-            'actions': actions,
-            'rewards': rewards
+            "model_name": self.config.model_name,
+            "device": str(self.device),
+            "parameters": sum(p.numel() for p in self.model.parameters()),
+            "trainable_parameters": sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         }
-
-    async def get_verifier_reward(self, conversation_history: List[Dict[str, str]], verifier_agent, mcp_client) -> float:
-        """
-        Get reward from verifier agent based on conversation validation
-
-        Args:
-            conversation_history: List of conversation messages
-            verifier_agent: BookingVerifierAgent instance
-            mcp_client: MCP client for database verification
-
-        Returns:
-            Reward (1.0 for valid, 0.0 for hallucinated)
-        """
-        try:
-            # Get verification report from verifier agent
-            verification_report = await verifier_agent.verify_bookings(conversation_history, mcp_client)
-
-            if not verification_report.get('verification_complete', False):
-                return 0.5  # Neutral reward if verification fails
-
-            summary = verification_report.get('summary', {})
-            total_claims = summary.get('total_claims', 0)
-            verified_claims = summary.get('verified', 0)
-            not_found_claims = summary.get('not_found', 0)
-
-            # If no claims made, give neutral reward
-            if total_claims == 0:
-                return 0.5
-
-            # Calculate verification rate
-            verification_rate = verified_claims / total_claims
-
-            # Binary reward: 1.0 if all claims verified, 0.0 if any hallucinations
-            if verification_rate == 1.0:
-                return 1.0
-            else:
-                return 0.0
-
-        except Exception as e:
-            # Return neutral reward on error
-            return 0.5
-
-    async def evaluate_on_objective(self, booking_objective: str, max_turns: int = 5) -> Dict[str, Any]:
-        """
-        Evaluate the agent on a specific booking objective
-
-        Args:
-            booking_objective: The booking goal
-            max_turns: Maximum number of conversation turns
-
-        Returns:
-            Evaluation results
-        """
-        self.reset_conversation(booking_objective)
-        conversation = []
-        for turn in range(max_turns):
-            if turn == 0:
-                user_msg = booking_objective
-            else:
-                user_msg = await self.generate_response()
-            conversation.append({"role": "user", "content": user_msg})
-            if any(word in user_msg.lower() for word in ['quit', 'exit', 'thank']):
-                break
-        return {
-            "objective": booking_objective,
-            "conversation": conversation,
-            "turns": len(conversation)
-        }
-
-
-class AutoUserPPOWrapper:
-    """Simple wrapper for PPO training compatibility"""
-
-    def __init__(self, auto_user: AutoUserAgent):
-        self.auto_user = auto_user
-
-    async def act(self, state: str) -> str:
-        """Generate action for PPO"""
-        return await self.auto_user.generate_response(context=state)
-
-    def get_parameters(self):
-        """Get model parameters"""
-        return self.auto_user.get_parameters()

@@ -216,7 +216,7 @@ class FlightBookingChatAgent:
         })
         
         # Add recent conversation messages
-        recent_history = self.conversation_history[-10:] if len(self.conversation_history) > 10 else self.conversation_history
+        recent_history = self.conversation_history[-100:] if len(self.conversation_history) > 100 else self.conversation_history
         enriched_history.extend(recent_history)
         
         # Pass enriched context to SQL coder
