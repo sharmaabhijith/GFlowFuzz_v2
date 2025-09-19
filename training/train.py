@@ -11,32 +11,40 @@ from datetime import datetime
 from typing import Dict, Any, List
 import json
 import traceback
-# Setup paths
+from rich.logging import RichHandler
+# Path configuration: Establish project structure to ensure imports work correctly
+# This allows the training module to access all project components regardless of where it's run from
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
-# Load environment variables
+# Environment configuration: Load API keys and environment-specific settings
+# The .env file should contain sensitive data like API keys that shouldn't be in version control
 from dotenv import load_dotenv
 env_path = project_root / '.env'
 load_dotenv(env_path)
-# Configure HuggingFace cache
+
+# HuggingFace cache configuration: Centralize model downloads to avoid redundant storage
+# This is critical for managing disk space when working with large language models
+# HuggingFace uses multiple cache directories - we unify them to a single location
+# This prevents duplicate model downloads and makes cleanup easier
 hf_cache = os.environ.get("HF_HOME", os.path.expanduser("~/hf_cache"))
 os.environ["HF_HOME"] = hf_cache
-os.environ["TRANSFORMERS_CACHE"] = os.path.join(hf_cache, "hub")
-os.environ["HF_HUB_CACHE"] = os.path.join(hf_cache, "hub")
-os.environ["HF_DATASETS_CACHE"] = os.path.join(hf_cache, "datasets")
-# Repo Imports
-from training.environment import BookingConversationEnvironment
-from training.utils import ExperienceBuffer, save_checkpoint, save_final_model, save_metrics, prepare_ppo_batch
-from agents.auto_user.module import AutoUserAgent, AutoUserConfig
-# UI Imports
+os.environ["TRANSFORMERS_CACHE"] = os.path.join(hf_cache, "hub")  # Model weights
+os.environ["HF_HUB_CACHE"] = os.path.join(hf_cache, "hub")  # Hub metadata
+os.environ["HF_DATASETS_CACHE"] = os.path.join(hf_cache, "datasets")  # Dataset storage
+# Core training components
+from training.environment import BookingConversationEnvironment  # Manages conversation state and rewards
+from training.utils import ExperienceBuffer, save_metrics  # General utilities
+from agents.auto_user.module import AutoUserAgent, AutoUserConfig  # The policy agent being trained
+from training.trainer import PPOAlgorithm, collect_trajectories
+# Rich helps in enhanced user experience
 from rich import box
 from rich.panel import Panel
 from rich.table import Table
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
-# TRL imports for PPO
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn
+from rich.live import Live
+from rich.layout import Layout
+from rich.text import Text
 
 
 def load_config(config_path: str) -> Dict:
@@ -45,8 +53,21 @@ def load_config(config_path: str) -> Dict:
         return yaml.safe_load(f)
 
 async def initialize_environment(config: Dict) -> BookingConversationEnvironment:
-    """Initialize the training environment"""
-    # Note: auto_user_config is None since environment manages state
+    """
+    Initialize the training environment with stateless architecture.
+
+    The environment is responsible for ALL state management, including conversation 
+    history, user objectives, and context. The policy agentremains stateless 
+    (markovian), treating each action request as independent.
+
+    Args:
+        config: Environment configuration including conversation parameters
+
+    Returns:
+        Initialized environment ready for trajectory collection
+    """
+    # auto_user_config=None signals that the environment manages its own state
+    # rather than delegating to the agent
     env = BookingConversationEnvironment(
         config=config["environment"],
         auto_user_config=None
@@ -56,197 +77,61 @@ async def initialize_environment(config: Dict) -> BookingConversationEnvironment
     return env
 
 
-def setup_ppo_trainer(policy_agent: AutoUserAgent, config: Dict) -> PPOTrainer:
-    """
-    Setup PPO trainer with stateless policy agent
-
-    The policy agent is stateless - it only maps states to actions
-    """
-    ppo_params = config["ppo"]
-    model_name = policy_agent.config.model_name
-    tokenizer_name = policy_agent.config.tokenizer_name or model_name
-
-    # Create PPO config
-    ppo_config = PPOConfig(
-        model_name=model_name,
-        learning_rate=ppo_params["learning_rate"],
-        batch_size=ppo_params["batch_size"],
-        mini_batch_size=ppo_params["mini_batch_size"],
-        gradient_accumulation_steps=ppo_params.get("gradient_accumulation_steps", 1),
-        ppo_epochs=ppo_params["ppo_epochs"],
-        gamma=ppo_params["gamma"],
-        lam=ppo_params["lam"],
-        cliprange=ppo_params["cliprange"],
-        cliprange_value=ppo_params.get("cliprange_value", 0.2),
-        vf_coef=ppo_params["vf_coef"],
-        seed=42,
-        log_with="tensorboard",
-        tracker_project_name="ppo_conversation_policy",
-        remove_unused_columns=False,
-        optimize_cuda_cache=True,
-        early_stopping=ppo_params.get("early_stopping", False),
-        target_kl=ppo_params.get("target_kl", 0.1)
-    )
-    # Create policy model with value head
-    model_with_value = AutoModelForCausalLMWithValueHead.from_pretrained(
-        model_name,  # Fixed: use model_name instead of undefined 'policy'
-        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    )
-    # Create reference model (frozen copy for KL divergence)
-    ref_model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    )
-    # Freeze reference model parameters
-    for param in ref_model.parameters():
-        param.requires_grad = False
-    # Create PPO trainer with all model components
-    ppo_trainer = PPOTrainer(
-        config=ppo_config,
-        model=model_with_value,  # Fixed: Use model with value head
-        ref_model=ref_model,  # Reference model (frozen for KL)
-        tokenizer=policy_agent.tokenizer  # Use the agent's tokenizer
-    )
-    return ppo_trainer
-
-
-async def collect_trajectories(
-    policy: AutoUserAgent,
-    environment: BookingConversationEnvironment,
-    num_episodes: int = 10,
-    gamma: float = 0.99,
-    logger=None
-) -> List[Dict]:
-    """
-    Collect trajectories from environment using STATELESS policy
-
-    Key point: No policy.reset_conversation() needed!
-    Environment handles all state management.
-    """
-    trajectories = []
-
-    for episode in range(num_episodes):
-        # Only environment resets - policy has no state to reset
-        state_obj = environment.reset()
-        # Environment provides COMPLETE state (objective + history + context)
-        state = environment._format_state(state_obj)
-
-        trajectory = {
-            "states": [],
-            "actions": [],
-            "rewards": [],
-            "dones": [],
-            "episode_reward": 0.0,
-            "num_turns": 0  # Track actual conversation turns
-        }
-        # Collect trajectory until episode done
-        done = False
-        turn_count = 0
-
-        while not done:
-            trajectory["states"].append(state)
-            # Policy is pure function: complete_state -> action
-            # No internal state or memory needed!
-            action = await policy.get_action(state)
-            trajectory["actions"].append(action)
-            # Environment step
-            step_result = await environment.step(action)
-            done = step_result.done
-            trajectory["dones"].append(done)
-            # Get next COMPLETE state from environment
-            state = environment._format_state(step_result.state)
-            turn_count += 1
-
-        # Store the actual number of conversation turns
-        trajectory["num_turns"] = turn_count
-        # Compute reward for complete trajectory after episode is done
-        episode_reward = await environment.compute_reward()
-        trajectory["episode_reward"] = episode_reward
-        # Use the environment's method for computing shaped rewards
-        # This implements proper credit assignment with discounting
-        trajectory["rewards"] = environment.compute_shaped_rewards(
-            terminal_reward=episode_reward,
-            num_steps=trajectory["num_turns"],
-            gamma=gamma  # Now passed as parameter
-        )
-
-        trajectories.append(trajectory)
-
-    return trajectories
-
-
-def prepare_ppo_batch(trajectories: List[Dict], tokenizer, device) -> tuple:
-    """
-    Prepare trajectories for PPO training
-
-    Converts collected trajectories into format expected by PPO trainer
-    """
-    queries = []
-    responses = []
-    rewards = []
-
-    for traj in trajectories:
-        num_turns = traj.get("num_turns", len(traj["states"]))
-        if num_turns == 0:
-            continue
-
-        for i in range(num_turns):
-            queries.append(traj["states"][i])
-            responses.append(traj["actions"][i])
-
-            # Sparse rewards - only at episode end
-            if i == num_turns - 1:  # Last turn
-                rewards.append(traj["episode_reward"])
-            else:
-                rewards.append(0.0)  # Intermediate turns
-
-    if not queries:
-        return None, None, None
-
-    # Tokenize queries and responses
-    query_tensors = []
-    response_tensors = []
-
-    for q, r in zip(queries, responses):
-        # Tokenize query (state/context)
-        q_tokens = tokenizer.encode(q, return_tensors="pt", truncation=True, max_length=512)
-        # Tokenize response (action)
-        r_tokens = tokenizer.encode(r, return_tensors="pt", truncation=True, max_length=128)
-
-        query_tensors.append(q_tokens.squeeze())
-        response_tensors.append(r_tokens.squeeze())
-
-    # Convert rewards to tensor
-    rewards_tensor = torch.tensor(rewards, dtype=torch.float32).to(device)
-
-    return query_tensors, response_tensors, rewards_tensor
-
-
 async def run_training(config: Dict):
     """
     Main training function with proper RL architecture:
-    - Stateless policy (pure function)
+    - Stateless policy
     - Environment manages all state
-    - Clean separation of concerns
     """
-    # Setup logging
+    console = Console()
     logging.basicConfig(
         level=config.get("logging", {}).get("level", "INFO"),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format='%(message)s',
+        handlers=[
+            RichHandler(console=console, rich_tracebacks=True)
+        ]
     )
     logger = logging.getLogger(__name__)
 
-    # Create output directory
+    # Display training configuration
+    config_table = Table(title="Training Configuration", box=box.ROUNDED)
+    config_table.add_column("Parameter", style="cyan")
+    config_table.add_column("Value", style="green")
+
+    config_table.add_row("Model", config["model"]["base_model"])
+    config_table.add_row("Learning Rate", str(config["ppo"]["learning_rate"]))
+    config_table.add_row("Batch Size", str(config["ppo"]["batch_size"]))
+    config_table.add_row("Max Epochs", str(config["ppo"]["max_epochs"]))
+    config_table.add_row("Rollout Episodes", str(config["ppo"]["rollout_episodes"]))
+    config_table.add_row("Architecture", "Stateless Policy with Stateful Environment")
+
+    console.print(config_table)
+    console.print()
+
+    # Output directory setup with organized structure
     output_dir = config["ppo"]["output_dir"]
     os.makedirs(output_dir, exist_ok=True)
-    # Save configuration
+
+    # Create subdirectories for better organization
+    trajectory_log_dir = os.path.join(output_dir, "trajectory_logs")
+    os.makedirs(trajectory_log_dir, exist_ok=True)
+
+    # Save configuration for reproducibility
     config_save_path = os.path.join(output_dir, "training_config.yaml")
     with open(config_save_path, 'w') as f:
         yaml.dump(config, f)
 
-    # Step 1: Initialize environment (manages all conversation state)
+    console.print(f"[green]Output directory:[/green] {output_dir}")
+    console.print(f"[green]Trajectory logs:[/green] {trajectory_log_dir}")
+    console.print()
+
+    # Training Setup Phase 1: Environment initialization
+    # The environment is the source of truth for all state management
+    console.print(Panel("[bold cyan]Initializing Training Components[/bold cyan]", expand=False))
     environment = await initialize_environment(config)
-    # Step 2: Initialize policy agent
+    console.print("[green]✓[/green] Environment initialized")
+
+    # Training Setup Phase 2: Policy agent initialization
     policy_config = AutoUserConfig(
         model_name=config["model"]["base_model"],
         tokenizer_name=config["model"].get("tokenizer", config["model"]["base_model"]),
@@ -257,22 +142,33 @@ async def run_training(config: Dict):
         top_p=0.9  # Added missing parameter
     )
     policy = AutoUserAgent(policy_config)
-    policy.initialize_model()  # Load the base model
-    # Step 3: Setup PPO trainer
-    ppo_trainer = setup_ppo_trainer(policy, config)
-    tokenizer = policy.tokenizer
-    # Initialize experience buffer
-    experience_buffer = ExperienceBuffer(max_size=config.get("buffer_size", 10000))
+    policy.initialize_model()  # Load the base model weights
+    console.print("[green]✓[/green] Policy model loaded")
 
+    # Training Setup Phase 3: Initialize trainer (PPO in this case)
+    # This modular design allows easy swapping of algorithms in the future
+    trainer = PPOAlgorithm(config, console=console)
+    trainer.setup_trainer(policy)
+    console.print("[green]✓[/green] trainer (PPO) initialized")
+
+    # Experience replay buffer: Stores past trajectories for sample efficiency
+    # Reusing past experiences reduces sample complexity and stabilizes training
+    experience_buffer = ExperienceBuffer(max_size=config.get("buffer_size", 10000))
+    console.print("[green]✓[/green] Experience buffer initialized")
+    console.print()
+
+    # Enhanced progress tracking with time estimation
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeRemainingColumn(),
+        console=console
     ) as progress:
 
         training_task = progress.add_task(
-            "[cyan]Training Progress (Stateless Policy)",
+            "[bold cyan]PPO Training Progress[/bold cyan]",
             total=config["ppo"]["max_epochs"]
         )
 
@@ -280,19 +176,32 @@ async def run_training(config: Dict):
         all_metrics = []
 
         for epoch in range(num_epochs):
-            progress.update(training_task, description=f"[cyan]Epoch {epoch+1}/{num_epochs}")
-            # Collect training trajectories
+            progress.update(training_task, description=f"[bold cyan]Epoch {epoch+1}/{num_epochs}[/bold cyan]")
+
+            # Display epoch panel
+            console.print(Panel(
+                f"[bold]Starting Epoch {epoch+1}[/bold]\n"
+                f"Collecting {config['ppo']['rollout_episodes']} trajectories...",
+                title="[cyan]Training Status[/cyan]",
+                expand=False
+            ))
+
+            # Trajectory collection phase: Generate new experience through rollouts
             trajectories = await collect_trajectories(
                 policy,
                 environment,
                 num_episodes=config["ppo"]["rollout_episodes"],
                 gamma=config["ppo"].get("gamma", 0.99),
-                logger=logger
+                logger=logger,
+                console=console,
+                trajectory_log_dir=trajectory_log_dir if epoch % 5 == 0 else None  # Log every 5 epochs
             )
 
-            # Collect validation trajectories if it's an evaluation epoch
+            # Validation phase: Evaluate policy performance without exploration
+            # This gives us an unbiased estimate of policy quality
             validation_metrics = None
             if (epoch + 1) % config["ppo"].get("eval_freq", 1) == 0:
+                console.print("\n[yellow]Running validation...[/yellow]")
                 val_trajectories = await collect_trajectories(
                     policy,
                     environment,
@@ -307,74 +216,128 @@ async def run_training(config: Dict):
                     "min_reward": min(val_rewards) if val_rewards else 0
                 }
 
-            # Add trajectories to buffer
+            # Experience replay: Store trajectories for future reuse
+            # This improves sample efficiency by learning from past experiences
             for traj in trajectories:
                 experience_buffer.add_episode(traj)
 
-            # Add buffer samples if configured
-            if config["ppo"]["use_buffer"] and epoch > 0:
-                buffer_trajectories = experience_buffer.sample_batch(len(trajectories) // 2)
-                if buffer_trajectories:
-                    trajectories.extend(buffer_trajectories)
-
-            # Prepare data for PPO trainer
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            query_tensors, response_tensors, rewards_tensor = prepare_ppo_batch(
-                trajectories, tokenizer, device
+            # Perform trainer training step (delegated to trainer module)
+            # This abstraction allows easy swapping of different RL algorithms
+            train_metrics = trainer.train_step(
+                trajectories=trajectories,
+                experience_buffer=experience_buffer,
+                epoch=epoch
             )
 
-            # PPO training step
-            ppo_loss = 0.0
-            mean_reward = 0.0
-
-            if query_tensors is not None and len(query_tensors) > 0:
-                stats = ppo_trainer.step(query_tensors, response_tensors, rewards_tensor)
-                # Extract metrics
-                ppo_loss = stats.get("ppo/loss/total", 0.0) if isinstance(stats, dict) else 0.0
-                mean_reward = rewards_tensor.mean().item()
-            else:
-                logger.warning(f"No valid data for PPO training in epoch {epoch + 1}")
-            # Calculate epoch statistics
+            ppo_loss = train_metrics.get("ppo_loss", 0.0)
+            mean_reward = train_metrics.get("mean_reward", 0.0)
+            # Epoch statistics: Aggregate metrics for monitoring progress
             episode_rewards = [traj["episode_reward"] for traj in trajectories]
             avg_reward = sum(episode_rewards) / len(episode_rewards) if episode_rewards else 0
-            # Log metrics
+            success_rate = sum(1 for r in episode_rewards if r > 0.5) / len(episode_rewards) if episode_rewards else 0
+
+            # Display trainer-specific epoch summary
+            epoch_display_metrics = {
+                "avg_reward": avg_reward,
+                "success_rate": success_rate,
+                "ppo_loss": ppo_loss,
+                "kl_divergence": train_metrics.get("kl_divergence", 0),
+                "value_loss": train_metrics.get("value_loss", 0),
+                "policy_loss": train_metrics.get("policy_loss", 0),
+                "num_trajectories": len(trajectories),
+                "validation": validation_metrics
+            }
+            trainer.display_epoch_summary(epoch + 1, epoch_display_metrics)
+
+            # Comprehensive metrics tracking
             epoch_summary = {
                 "epoch": epoch + 1,
                 "avg_episode_reward": avg_reward,
+                "success_rate": success_rate,  # Added success rate tracking
                 "ppo_loss": ppo_loss,
                 "mean_reward": mean_reward,
                 "num_trajectories": len(trajectories),
                 "total_steps": sum(traj.get("num_turns", len(traj["states"])) for traj in trajectories),
                 "buffer_stats": experience_buffer.get_stats(),
-                "architecture": "stateless",  # Mark as stateless architecture
-                "validation": validation_metrics  # Add validation metrics
+                "architecture": "stateless",  # Architecture identifier for analysis
+                "validation": validation_metrics  # Validation performance
             }
             all_metrics.append(epoch_summary)
-            # Save checkpoint
+            # Checkpoint saving: Delegated to trainer for trainer-specific handling
             if (epoch + 1) % config["ppo"]["save_freq"] == 0:
-                save_checkpoint(
-                    ppo_trainer.model,
-                    tokenizer,
-                    experience_buffer,
+                trainer.save_checkpoint(
                     epoch + 1,
-                    output_dir
+                    output_dir,
+                    experience_buffer
                 )
 
-            # Log progress
+            # Progress logging with validation comparison
             if validation_metrics:
-                logger.info(f"Epoch {epoch + 1}: Train Reward={avg_reward:.3f}, Val Reward={validation_metrics['mean_reward']:.3f}")
+                logger.info(
+                    f"Epoch {epoch + 1} Complete | "
+                    f"Train: {avg_reward:.3f} (Success: {success_rate:.1%}) | "
+                    f"Val: {validation_metrics['mean_reward']:.3f}"
+                )
             else:
-                logger.info(f"Epoch {epoch + 1}: Train Reward={avg_reward:.3f}")
+                logger.info(
+                    f"Epoch {epoch + 1} Complete | "
+                    f"Reward: {avg_reward:.3f} | "
+                    f"Success Rate: {success_rate:.1%}"
+                )
 
             progress.advance(training_task)
 
-    save_final_model(ppo_trainer.model, tokenizer, output_dir)
+    # Training completion: Save final artifacts
+    console.print(Panel(
+        "[bold green]Training Complete![/bold green]",
+        title="Status",
+        expand=False
+    ))
+
+    # Save final model using trainer-specific method
+    trainer.save_final_model(output_dir)
     save_metrics(all_metrics, output_dir)
+
+    # Display final summary
+    final_table = Table(title="Training Results", box=box.DOUBLE)
+    final_table.add_column("Metric", style="cyan")
+    final_table.add_column("Value", style="green")
+
+    if all_metrics:
+        final_metrics = all_metrics[-1]
+        final_table.add_row("Final Epoch", str(final_metrics["epoch"]))
+        final_table.add_row("Final Avg Reward", f"{final_metrics['avg_episode_reward']:.3f}")
+        final_table.add_row("Final Success Rate", f"{final_metrics.get('success_rate', 0):.1%}")
+        final_table.add_row("Total Steps Trained", str(sum(m["total_steps"] for m in all_metrics)))
+
+    final_table.add_row("Model Saved To", output_dir)
+    console.print(final_table)
+
+    console.print(f"\n[green]Trajectory logs saved to:[/green] {trajectory_log_dir}")
+    console.print("[cyan]Review the logs to understand conversation patterns and success cases.[/cyan]")
 
 
 def main():
-    """Main entry point"""
-    parser = argparse.ArgumentParser(description="PPO Training for Conversation Policy (Stateless Architecture)")
+    """
+    Main entry point for PPO training.
+
+    Architecture Philosophy:
+    This implementation follows clean RL principles with strict separation:
+    - Policy: Stateless function mapping observations to actions
+    - Environment: Maintains all state and computes rewards
+    - Training: PPO with experience replay for sample efficiency
+
+    This design ensures reproducibility, debuggability, and theoretical soundness.
+    """
+    parser = argparse.ArgumentParser(
+        description="PPO Training for Conversation Policy (Stateless Architecture)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  python train.py --config configs/ppo_training_config.yaml
+  python train.py --config custom_config.yaml --debug
+  python train.py --resume checkpoints/epoch_10.pt
+        """
+    )
     parser.add_argument("--config", type=str, default="configs/ppo_training_config.yaml",
                        help="Path to training configuration file")
     parser.add_argument("--resume", type=str, default=None,
