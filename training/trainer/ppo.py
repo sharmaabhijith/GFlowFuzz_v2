@@ -142,11 +142,10 @@ class PPOAlgorithm:
         Data Processing Strategy:
         - Flatten episode trajectories into individual (state, action, reward) tuples
         - Tokenize text data with appropriate truncation for model limits
-        - Apply sparse rewards only at episode boundaries
+        - Now uses combined process and terminal rewards
 
-        Why Sparse Rewards: In conversation tasks, intermediate turns don't have
-        clear quality signals. Only the final outcome (objective achieved or not)
-        provides reliable feedback.
+        Process rewards provide immediate feedback during conversation,
+        while terminal rewards evaluate overall success.
 
         Args:
             trajectories: List of collected episode trajectories
@@ -156,7 +155,7 @@ class PPOAlgorithm:
         """
         queries = []      # States/contexts that prompt actions
         responses = []    # Actions taken (agent responses)
-        rewards = []      # Rewards for each state-action pair
+        rewards = []      # Combined rewards for each state-action pair
 
         for traj in trajectories:
             num_turns = traj.get("num_turns", len(traj["states"]))
@@ -167,12 +166,16 @@ class PPOAlgorithm:
                 queries.append(traj["states"][i])
                 responses.append(traj["actions"][i])
 
-                # Sparse reward assignment: Only the final action gets the episode reward
-                # This is because we can't evaluate partial conversation success
-                if i == num_turns - 1:  # Terminal state
-                    rewards.append(traj["episode_reward"])
+                # Use the combined rewards that include both process and terminal rewards
+                # These were already computed in collect_trajectories
+                if "rewards" in traj and i < len(traj["rewards"]):
+                    rewards.append(traj["rewards"][i])
                 else:
-                    rewards.append(0.0)  # Non-terminal states have no immediate reward
+                    # Fallback for backward compatibility
+                    if i == num_turns - 1:  # Terminal state
+                        rewards.append(traj.get("episode_reward", 0.0))
+                    else:
+                        rewards.append(0.0)
 
         if not queries:
             return None, None, None
@@ -345,7 +348,9 @@ class PPOAlgorithm:
         summary_table.add_column("Value", style="green")
 
         # Add metrics to table
-        summary_table.add_row("Average Reward", f"{metrics.get('avg_reward', 0):.3f}")
+        summary_table.add_row("Average Total Reward", f"{metrics.get('avg_reward', 0):.3f}")
+        summary_table.add_row("Terminal Reward", f"{metrics.get('avg_terminal_reward', 0):.3f}")
+        summary_table.add_row("Process Reward", f"{metrics.get('avg_process_reward', 0):.3f}")
         summary_table.add_row("Success Rate", f"{metrics.get('success_rate', 0):.1%}")
         summary_table.add_row("PPO Loss", f"{metrics.get('ppo_loss', 0):.4f}")
         summary_table.add_row("KL Divergence", f"{metrics.get('kl_divergence', 0):.4f}")
@@ -413,8 +418,10 @@ async def collect_trajectories(
             "states": [],      # Complete environment states at each timestep
             "actions": [],     # Agent responses/actions taken
             "rewards": [],     # Shaped rewards (computed post-hoc)
+            "process_rewards": [],  # Process rewards for each step
             "dones": [],       # Episode termination flags
             "episode_reward": 0.0,  # Final sparse reward (success=1, failure=0)
+            "terminal_reward": 0.0,  # Terminal reward at episode end
             "num_turns": 0,    # Total conversation turns for this episode
             "conversation_history": []  # Store for logging successful conversations
         }
@@ -425,6 +432,7 @@ async def collect_trajectories(
 
         while not done:
             trajectory["states"].append(state)
+            previous_state = state_obj  # Keep track of previous state for process reward
 
             # Pure functional policy: Maps current state to action without memory
             # This ensures no information leakage between episodes and maintains
@@ -444,7 +452,14 @@ async def collect_trajectories(
             done = step_result.done
             trajectory["dones"].append(done)
 
+            # Compute process reward for this step
+            process_reward = await environment.compute_process_reward(
+                previous_state, action, step_result.state
+            )
+            trajectory["process_rewards"].append(process_reward)
+
             # Get next COMPLETE state from environment
+            state_obj = step_result.state
             state = environment._format_state(step_result.state)
             turn_count += 1
 
@@ -452,25 +467,32 @@ async def collect_trajectories(
 
         # Terminal reward computation: Evaluate if conversation achieved objective
         # This is the sparse signal that drives learning (1=success, 0=failure)
-        episode_reward = await environment.compute_reward()
-        trajectory["episode_reward"] = episode_reward
+        terminal_reward = await environment.compute_terminal_reward()
+        trajectory["terminal_reward"] = terminal_reward
 
-        # Temporal credit assignment: Distribute reward across trajectory
-        # Uses exponential discounting to assign more credit to recent actions
-        # This solves the credit assignment problem in sparse reward settings
-        trajectory["rewards"] = environment.compute_shaped_rewards(
-            terminal_reward=episode_reward,
-            num_steps=trajectory["num_turns"],
-            gamma=gamma  # Controls how much to value immediate vs future rewards
-        )
+        # For backward compatibility, also store as episode_reward
+        trajectory["episode_reward"] = terminal_reward
+
+        # Combine process and terminal rewards
+        # Process rewards provide immediate feedback, terminal reward provides goal achievement signal
+        combined_rewards = []
+        for i, process_r in enumerate(trajectory["process_rewards"]):
+            if i == len(trajectory["process_rewards"]) - 1:
+                # Last step gets both process and terminal reward
+                combined_rewards.append(process_r + terminal_reward)
+            else:
+                # Other steps only get process reward
+                combined_rewards.append(process_r)
+
+        trajectory["rewards"] = combined_rewards
 
         # Log successful trajectories for analysis
-        if episode_reward > 0.5:  # Threshold for "successful" conversation
+        if terminal_reward > 0.5:  # Threshold for "successful" conversation
             successful_trajectories.append(trajectory)
             if console:
-                console.print(f"[green]✓ Episode {episode + 1} successful![/green] Reward: {episode_reward:.2f}")
+                console.print(f"[green]✓ Episode {episode + 1} successful![/green] Terminal: {terminal_reward:.2f}, Process: {sum(trajectory['process_rewards']):.2f}")
         elif console:
-            console.print(f"[yellow]Episode {episode + 1} completed.[/yellow] Reward: {episode_reward:.2f}")
+            console.print(f"[yellow]Episode {episode + 1} completed.[/yellow] Terminal: {terminal_reward:.2f}, Process: {sum(trajectory['process_rewards']):.2f}")
 
         trajectories.append(trajectory)
 

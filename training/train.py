@@ -35,7 +35,8 @@ os.environ["HF_DATASETS_CACHE"] = os.path.join(hf_cache, "datasets")  # Dataset 
 from training.environment import BookingConversationEnvironment  # Manages conversation state and rewards
 from training.utils import ExperienceBuffer, save_metrics  # General utilities
 from agents.auto_user.module import AutoUserAgent, AutoUserConfig  # The policy agent being trained
-from training.trainer import PPOAlgorithm, collect_trajectories
+from training.trainer.ppo import PPOAlgorithm, collect_trajectories
+from training.trainer.grpo import GRPOAlgorithm  # GRPO algorithm implementation
 # Rich helps in enhanced user experience
 from rich import box
 from rich.panel import Panel
@@ -93,23 +94,38 @@ async def run_training(config: Dict):
     )
     logger = logging.getLogger(__name__)
 
+    # Determine which algorithm to use
+    algorithm_name = config.get("algorithm", "ppo").lower()
+
     # Display training configuration
     config_table = Table(title="Training Configuration", box=box.ROUNDED)
     config_table.add_column("Parameter", style="cyan")
     config_table.add_column("Value", style="green")
 
+    config_table.add_row("Algorithm", algorithm_name.upper())
     config_table.add_row("Model", config["model"]["base_model"])
-    config_table.add_row("Learning Rate", str(config["ppo"]["learning_rate"]))
-    config_table.add_row("Batch Size", str(config["ppo"]["batch_size"]))
-    config_table.add_row("Max Epochs", str(config["ppo"]["max_epochs"]))
-    config_table.add_row("Rollout Episodes", str(config["ppo"]["rollout_episodes"]))
+
+    # Algorithm-specific parameters
+    if algorithm_name == "grpo":
+        algo_config = config["grpo"]
+        config_table.add_row("Learning Rate", str(algo_config["learning_rate"]))
+        config_table.add_row("Batch Size", str(algo_config["batch_size"]))
+        config_table.add_row("Group Size", str(algo_config["group_size"]))
+        config_table.add_row("Max Epochs", str(algo_config["max_epochs"]))
+    else:  # PPO
+        algo_config = config["ppo"]
+        config_table.add_row("Learning Rate", str(algo_config["learning_rate"]))
+        config_table.add_row("Batch Size", str(algo_config["batch_size"]))
+        config_table.add_row("Max Epochs", str(algo_config["max_epochs"]))
+
+    config_table.add_row("Rollout Episodes", str(algo_config.get("max_conversations_per_epoch", 30)))
     config_table.add_row("Architecture", "Stateless Policy with Stateful Environment")
 
     console.print(config_table)
     console.print()
 
     # Output directory setup with organized structure
-    output_dir = config["ppo"]["output_dir"]
+    output_dir = algo_config["output_dir"]
     os.makedirs(output_dir, exist_ok=True)
 
     # Create subdirectories for better organization
@@ -145,11 +161,16 @@ async def run_training(config: Dict):
     policy.initialize_model()  # Load the base model weights
     console.print("[green]✓[/green] Policy model loaded")
 
-    # Training Setup Phase 3: Initialize trainer (PPO in this case)
-    # This modular design allows easy swapping of algorithms in the future
-    trainer = PPOAlgorithm(config, console=console)
-    trainer.setup_trainer(policy)
-    console.print("[green]✓[/green] trainer (PPO) initialized")
+    # Training Setup Phase 3: Initialize trainer based on selected algorithm
+    # This modular design allows easy swapping of algorithms
+    if algorithm_name == "grpo":
+        trainer = GRPOAlgorithm(config, console=console)
+        trainer.setup_trainer(policy)  # Both use setup_trainer now
+        console.print("[green]✓[/green] Trainer (GRPO) initialized")
+    else:  # PPO
+        trainer = PPOAlgorithm(config, console=console)
+        trainer.setup_trainer(policy)
+        console.print("[green]✓[/green] Trainer (PPO) initialized")
 
     # Experience replay buffer: Stores past trajectories for sample efficiency
     # Reusing past experiences reduces sample complexity and stabilizes training
@@ -168,11 +189,11 @@ async def run_training(config: Dict):
     ) as progress:
 
         training_task = progress.add_task(
-            "[bold cyan]PPO Training Progress[/bold cyan]",
-            total=config["ppo"]["max_epochs"]
+            f"[bold cyan]{algorithm_name.upper()} Training Progress[/bold cyan]",
+            total=algo_config["max_epochs"]
         )
 
-        num_epochs = config["ppo"]["max_epochs"]
+        num_epochs = algo_config["max_epochs"]
         all_metrics = []
 
         for epoch in range(num_epochs):
@@ -187,11 +208,12 @@ async def run_training(config: Dict):
             ))
 
             # Trajectory collection phase: Generate new experience through rollouts
+            rollout_episodes = algo_config.get("max_conversations_per_epoch", 30)
             trajectories = await collect_trajectories(
                 policy,
                 environment,
-                num_episodes=config["ppo"]["rollout_episodes"],
-                gamma=config["ppo"].get("gamma", 0.99),
+                num_episodes=rollout_episodes,
+                gamma=algo_config.get("gamma", 0.99),
                 logger=logger,
                 console=console,
                 trajectory_log_dir=trajectory_log_dir if epoch % 5 == 0 else None  # Log every 5 epochs
@@ -200,13 +222,13 @@ async def run_training(config: Dict):
             # Validation phase: Evaluate policy performance without exploration
             # This gives us an unbiased estimate of policy quality
             validation_metrics = None
-            if (epoch + 1) % config["ppo"].get("eval_freq", 1) == 0:
+            if (epoch + 1) % algo_config.get("eval_freq", 1) == 0:
                 console.print("\n[yellow]Running validation...[/yellow]")
                 val_trajectories = await collect_trajectories(
                     policy,
                     environment,
                     num_episodes=config["evaluation"].get("num_eval_episodes", 5),
-                    gamma=config["ppo"].get("gamma", 0.99),
+                    gamma=algo_config.get("gamma", 0.99),
                     logger=logger
                 )
                 val_rewards = [t["episode_reward"] for t in val_trajectories]
@@ -229,42 +251,67 @@ async def run_training(config: Dict):
                 epoch=epoch
             )
 
-            ppo_loss = train_metrics.get("ppo_loss", 0.0)
+            # Extract algorithm-specific loss
+            if algorithm_name == "grpo":
+                algo_loss = train_metrics.get("grpo_loss", 0.0)
+            else:
+                algo_loss = train_metrics.get("ppo_loss", 0.0)
             mean_reward = train_metrics.get("mean_reward", 0.0)
             # Epoch statistics: Aggregate metrics for monitoring progress
             episode_rewards = [traj["episode_reward"] for traj in trajectories]
+            terminal_rewards = [traj.get("terminal_reward", traj["episode_reward"]) for traj in trajectories]
+            process_rewards = [sum(traj.get("process_rewards", [])) for traj in trajectories]
+
             avg_reward = sum(episode_rewards) / len(episode_rewards) if episode_rewards else 0
-            success_rate = sum(1 for r in episode_rewards if r > 0.5) / len(episode_rewards) if episode_rewards else 0
+            avg_terminal = sum(terminal_rewards) / len(terminal_rewards) if terminal_rewards else 0
+            avg_process = sum(process_rewards) / len(process_rewards) if process_rewards else 0
+            success_rate = sum(1 for r in terminal_rewards if r > 0.5) / len(terminal_rewards) if terminal_rewards else 0
 
             # Display trainer-specific epoch summary
             epoch_display_metrics = {
                 "avg_reward": avg_reward,
+                "avg_terminal_reward": avg_terminal,
+                "avg_process_reward": avg_process,
                 "success_rate": success_rate,
-                "ppo_loss": ppo_loss,
                 "kl_divergence": train_metrics.get("kl_divergence", 0),
-                "value_loss": train_metrics.get("value_loss", 0),
-                "policy_loss": train_metrics.get("policy_loss", 0),
                 "num_trajectories": len(trajectories),
                 "validation": validation_metrics
             }
+
+            # Add algorithm-specific metrics
+            if algorithm_name == "grpo":
+                epoch_display_metrics["grpo_loss"] = algo_loss
+            else:  # PPO
+                epoch_display_metrics["ppo_loss"] = algo_loss
+                epoch_display_metrics["value_loss"] = train_metrics.get("value_loss", 0)
+                epoch_display_metrics["policy_loss"] = train_metrics.get("policy_loss", 0)
             trainer.display_epoch_summary(epoch + 1, epoch_display_metrics)
 
             # Comprehensive metrics tracking
             epoch_summary = {
                 "epoch": epoch + 1,
+                "algorithm": algorithm_name,
                 "avg_episode_reward": avg_reward,
-                "success_rate": success_rate,  # Added success rate tracking
-                "ppo_loss": ppo_loss,
+                "avg_terminal_reward": avg_terminal,
+                "avg_process_reward": avg_process,
+                "success_rate": success_rate,
+                "algo_loss": algo_loss,
                 "mean_reward": mean_reward,
                 "num_trajectories": len(trajectories),
                 "total_steps": sum(traj.get("num_turns", len(traj["states"])) for traj in trajectories),
                 "buffer_stats": experience_buffer.get_stats(),
-                "architecture": "stateless",  # Architecture identifier for analysis
-                "validation": validation_metrics  # Validation performance
+                "architecture": "stateless",
+                "validation": validation_metrics
             }
+
+            # Add algorithm-specific metrics to summary
+            if algorithm_name == "grpo":
+                epoch_summary["grpo_loss"] = algo_loss
+            else:
+                epoch_summary["ppo_loss"] = algo_loss
             all_metrics.append(epoch_summary)
             # Checkpoint saving: Delegated to trainer for trainer-specific handling
-            if (epoch + 1) % config["ppo"]["save_freq"] == 0:
+            if (epoch + 1) % algo_config["save_freq"] == 0:
                 trainer.save_checkpoint(
                     epoch + 1,
                     output_dir,

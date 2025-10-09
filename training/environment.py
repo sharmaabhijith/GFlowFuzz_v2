@@ -146,7 +146,7 @@ class BookingConversationEnvironment:
             info=info
         )
 
-    async def compute_reward(self) -> float:
+    async def compute_halluciination_reward(self) -> float:
         """
         Compute reward for the complete trajectory/conversation
 
@@ -167,6 +167,64 @@ class BookingConversationEnvironment:
         # If no verifier, return a default reward
         # Could be extended with other reward mechanisms
         return 0
+
+    async def compute_process_reward(self, state: ConversationState, action: str, next_state: ConversationState) -> float:
+        """
+        Compute process reward for a single step transition.
+
+        Process rewards provide immediate feedback during the conversation,
+        helping the agent learn good conversation patterns even before reaching
+        the terminal state.
+
+        Args:
+            state: Current conversation state
+            action: Action taken (user message)
+            next_state: Resulting state after action
+
+        Returns:
+            Process reward as float
+        """
+        reward = 0.0
+
+        # TODO: Implement process reward logic
+        # Example ideas for process rewards:
+        # - Reward for maintaining conversation flow
+        # - Reward for providing relevant information
+        # - Penalty for repetitive responses
+        # - Reward for progressing toward booking completion
+        # - Penalty for conversation going off-topic
+
+        # Placeholder implementation - to be filled with actual logic
+        # For now, return a small positive reward for each step to encourage conversation
+        reward = 0.01
+
+        return reward
+
+    async def compute_terminal_reward(self) -> float:
+        """
+        Compute terminal reward at the end of conversation.
+
+        This is the main reward signal that evaluates the overall success
+        of the conversation in achieving the booking objective.
+
+        Returns:
+            Terminal reward as float
+        """
+        # Check if conversation is actually complete
+        if not self.current_state or not self.current_state.is_terminated:
+            self.logger.warning("compute_terminal_reward called but trajectory not complete")
+            return 0.0
+
+        # TODO: Implement terminal reward logic
+        # This will be the main reward signal based on:
+        # - Whether booking objective was achieved
+        # - Quality of the booking made
+        # - Efficiency of the conversation
+        # - User satisfaction metrics
+
+        # For now, delegate to existing reward computation
+        # This maintains backward compatibility while we implement new logic
+        return await self.compute_halluciination_reward()
 
     def compute_shaped_rewards(self, terminal_reward: float, num_steps: int, gamma: float = 0.99) -> List[float]:
         """
