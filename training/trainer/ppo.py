@@ -22,9 +22,9 @@ import logging
 import json
 from datetime import datetime
 
-# TRL imports for PPO
+# TRL imports for PPO with Unsloth
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from unsloth import FastLanguageModel
 
 # Rich UI components
 from rich.console import Console
@@ -101,19 +101,42 @@ class PPOAlgorithm:
             target_kl=ppo_params.get("target_kl", 0.1)  # KL divergence threshold
         )
 
-        # Actor-Critic model: Base LLM + value head for state value estimation
-        # The value head learns to predict expected returns from each state
-        model_with_value = AutoModelForCausalLMWithValueHead.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        # Load model and tokenizer using Unsloth's FastLanguageModel
+        max_seq_length = 2048  # Unsloth auto supports RoPE Scaling internally
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        load_in_4bit = True  # 4bit quantization enabled to save memory space
+
+        # Load base model with Unsloth for efficient training
+        base_model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=model_name,
+            max_seq_length=max_seq_length,
+            dtype=dtype,
+            load_in_4bit=load_in_4bit,
         )
 
-        # Reference model: Frozen copy of the initial policy
-        # Used to compute KL divergence penalty, preventing catastrophic forgetting
-        # and maintaining language coherence during RL training
-        ref_model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        # Prepare model for k-bit training with Unsloth (enables LoRA for efficiency)
+        base_model = FastLanguageModel.get_peft_model(
+            base_model,
+            r=16,  # LoRA rank - suggested values 8, 16, 32, 64, 128
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                          "gate_proj", "up_proj", "down_proj"],
+            lora_alpha=16,
+            lora_dropout=0,  # Supports any, but = 0 is optimized
+            bias="none",  # Supports any, but = "none" is optimized
+            use_gradient_checkpointing="unsloth",  # True or "unsloth" for very long context
+            random_state=42,
+        )
+
+        # Wrap with value head for PPO (Actor-Critic architecture)
+        model_with_value = AutoModelForCausalLMWithValueHead.from_pretrained(base_model)
+
+        # Reference model: We need a frozen copy for KL divergence
+        # Load a separate instance for the reference model
+        ref_model, _ = FastLanguageModel.from_pretrained(
+            model_name=model_name,
+            max_seq_length=max_seq_length,
+            dtype=dtype,
+            load_in_4bit=load_in_4bit,
         )
 
         # Freezing ensures reference distribution remains constant during training
@@ -125,10 +148,10 @@ class PPOAlgorithm:
             config=ppo_config,
             model=model_with_value,
             ref_model=ref_model,
-            tokenizer=policy_agent.tokenizer
+            tokenizer=tokenizer  # Use the tokenizer from FastLanguageModel
         )
 
-        self.tokenizer = policy_agent.tokenizer
+        self.tokenizer = tokenizer
 
         if self.console:
             self.console.print("[green]✓[/green] PPO trainer initialized successfully")
@@ -198,32 +221,22 @@ class PPOAlgorithm:
 
         return query_tensors, response_tensors, rewards_tensor
 
-    def train_step(self, trajectories: List[Dict], experience_buffer=None, epoch: int = 0) -> Dict:
+    def train_step(self, trajectories: List[Dict], epoch: int = 0) -> Dict:
         """
         Perform a single PPO training step with collected trajectories.
 
         This method handles:
-        - Experience replay mixing (if enabled)
         - Batch preparation and tokenization
         - PPO optimization step
         - Metrics extraction and logging
 
         Args:
             trajectories: Fresh trajectories from current rollouts
-            experience_buffer: Optional replay buffer for off-policy learning
             epoch: Current training epoch for logging
 
         Returns:
             Dictionary containing training metrics
         """
-        # Off-policy learning: Mix current trajectories with replay buffer
-        # This stabilizes training and improves sample efficiency
-        if experience_buffer and self.config["ppo"]["use_buffer"] and epoch > 0:
-            buffer_trajectories = experience_buffer.sample_batch(len(trajectories) // 2)
-            if buffer_trajectories:
-                trajectories.extend(buffer_trajectories)
-                if self.console:
-                    self.console.print(f"[cyan]Added {len(buffer_trajectories)} trajectories from replay buffer[/cyan]")
 
         # Prepare data for PPO trainer
         query_tensors, response_tensors, rewards_tensor = self.prepare_batch(trajectories)
@@ -258,7 +271,7 @@ class PPOAlgorithm:
             logger.warning(f"No valid data for PPO training in epoch {epoch + 1}")
 
         return {
-            "ppo_loss": ppo_loss,
+            "loss": ppo_loss,
             "mean_reward": mean_reward,
             "kl_divergence": kl_divergence,
             "value_loss": value_loss,
@@ -266,14 +279,13 @@ class PPOAlgorithm:
             "num_samples": len(query_tensors) if query_tensors else 0
         }
 
-    def save_checkpoint(self, epoch: int, output_dir: str, experience_buffer=None):
+    def save_checkpoint(self, epoch: int, output_dir: str):
         """
         Save training checkpoint with model and optimizer state.
 
         Args:
             epoch: Current epoch number
             output_dir: Directory to save checkpoint
-            experience_buffer: Optional buffer to save
         """
         checkpoint_dir = Path(output_dir) / f"checkpoint-{epoch}"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -281,10 +293,6 @@ class PPOAlgorithm:
         # Save model and tokenizer
         self.trainer.model.save_pretrained(checkpoint_dir)
         self.tokenizer.save_pretrained(checkpoint_dir)
-
-        # Save experience buffer if provided
-        if experience_buffer:
-            experience_buffer.save(checkpoint_dir / "buffer.json")
 
         # Save training state
         state_dict = {
@@ -352,7 +360,7 @@ class PPOAlgorithm:
         summary_table.add_row("Terminal Reward", f"{metrics.get('avg_terminal_reward', 0):.3f}")
         summary_table.add_row("Process Reward", f"{metrics.get('avg_process_reward', 0):.3f}")
         summary_table.add_row("Success Rate", f"{metrics.get('success_rate', 0):.1%}")
-        summary_table.add_row("PPO Loss", f"{metrics.get('ppo_loss', 0):.4f}")
+        summary_table.add_row("Loss", f"{metrics.get('loss', 0):.4f}")
         summary_table.add_row("KL Divergence", f"{metrics.get('kl_divergence', 0):.4f}")
         summary_table.add_row("Value Loss", f"{metrics.get('value_loss', 0):.4f}")
         summary_table.add_row("Policy Loss", f"{metrics.get('policy_loss', 0):.4f}")
@@ -363,156 +371,3 @@ class PPOAlgorithm:
 
         self.console.print(summary_table)
         self.console.print()
-
-
-async def collect_trajectories(
-    policy,
-    environment,
-    num_episodes: int = 10,
-    gamma: float = 0.99,
-    logger=None,
-    console: Console = None,
-    trajectory_log_dir: str = None
-) -> List[Dict]:
-    """
-    Collect trajectories using Monte Carlo rollouts with a stateless policy.
-
-    Critical Architecture Point: The policy is treated as a pure function
-    mapping states to actions. All conversational context and history is
-    maintained by the environment, ensuring clean separation of concerns.
-
-    Reward Structure:
-    - Sparse rewards: Only given at episode termination (success/failure)
-    - Credit assignment: Uses discounted rewards to propagate signal back
-
-    Args:
-        policy: Stateless policy agent (pure state->action mapping)
-        environment: Stateful environment managing conversation flow
-        num_episodes: Number of complete conversations to collect
-        gamma: Discount factor for temporal credit assignment
-        logger: Logger for debugging and monitoring
-        console: Rich console for enhanced UI output
-        trajectory_log_dir: Directory to save successful trajectories
-
-    Returns:
-        List of trajectory dictionaries with states, actions, and shaped rewards
-    """
-    trajectories = []
-    successful_trajectories = []  # Track successful conversations for logging
-
-    for episode in range(num_episodes):
-        # Environment reset: Generates new user objective and clears conversation
-        # The policy never needs resetting as it maintains no internal state
-        state_obj = environment.reset()
-
-        # State formatting: Environment packages complete context including:
-        # - User objective (what the user wants to achieve)
-        # - Full conversation history (all previous turns)
-        # - System prompts and constraints
-        state = environment._format_state(state_obj)
-
-        if console:
-            console.print(f"[cyan]Episode {episode + 1}/{num_episodes}[/cyan] starting...")
-
-        trajectory = {
-            "states": [],      # Complete environment states at each timestep
-            "actions": [],     # Agent responses/actions taken
-            "rewards": [],     # Shaped rewards (computed post-hoc)
-            "process_rewards": [],  # Process rewards for each step
-            "dones": [],       # Episode termination flags
-            "episode_reward": 0.0,  # Final sparse reward (success=1, failure=0)
-            "terminal_reward": 0.0,  # Terminal reward at episode end
-            "num_turns": 0,    # Total conversation turns for this episode
-            "conversation_history": []  # Store for logging successful conversations
-        }
-
-        # Episode rollout: Collect a complete conversation trajectory
-        done = False
-        turn_count = 0
-
-        while not done:
-            trajectory["states"].append(state)
-            previous_state = state_obj  # Keep track of previous state for process reward
-
-            # Pure functional policy: Maps current state to action without memory
-            # This ensures no information leakage between episodes and maintains
-            # Markov property required for valid RL training
-            action = await policy.get_action(state)
-            trajectory["actions"].append(action)
-
-            # Store conversation for potential logging
-            trajectory["conversation_history"].append({
-                "turn": turn_count,
-                "state_preview": state[:200] + "..." if len(state) > 200 else state,
-                "action": action
-            })
-
-            # Environment step
-            step_result = await environment.step(action)
-            done = step_result.done
-            trajectory["dones"].append(done)
-
-            # Compute process reward for this step
-            process_reward = await environment.compute_process_reward(
-                previous_state, action, step_result.state
-            )
-            trajectory["process_rewards"].append(process_reward)
-
-            # Get next COMPLETE state from environment
-            state_obj = step_result.state
-            state = environment._format_state(step_result.state)
-            turn_count += 1
-
-        trajectory["num_turns"] = turn_count
-
-        # Terminal reward computation: Evaluate if conversation achieved objective
-        # This is the sparse signal that drives learning (1=success, 0=failure)
-        terminal_reward = await environment.compute_terminal_reward()
-        trajectory["terminal_reward"] = terminal_reward
-
-        # For backward compatibility, also store as episode_reward
-        trajectory["episode_reward"] = terminal_reward
-
-        # Combine process and terminal rewards
-        # Process rewards provide immediate feedback, terminal reward provides goal achievement signal
-        combined_rewards = []
-        for i, process_r in enumerate(trajectory["process_rewards"]):
-            if i == len(trajectory["process_rewards"]) - 1:
-                # Last step gets both process and terminal reward
-                combined_rewards.append(process_r + terminal_reward)
-            else:
-                # Other steps only get process reward
-                combined_rewards.append(process_r)
-
-        trajectory["rewards"] = combined_rewards
-
-        # Log successful trajectories for analysis
-        if terminal_reward > 0.5:  # Threshold for "successful" conversation
-            successful_trajectories.append(trajectory)
-            if console:
-                console.print(f"[green]✓ Episode {episode + 1} successful![/green] Terminal: {terminal_reward:.2f}, Process: {sum(trajectory['process_rewards']):.2f}")
-        elif console:
-            console.print(f"[yellow]Episode {episode + 1} completed.[/yellow] Terminal: {terminal_reward:.2f}, Process: {sum(trajectory['process_rewards']):.2f}")
-
-        trajectories.append(trajectory)
-
-    # Save successful trajectories to log file if requested
-    if trajectory_log_dir and successful_trajectories:
-        os.makedirs(trajectory_log_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = os.path.join(trajectory_log_dir, f"successful_trajectories_{timestamp}.json")
-
-        with open(log_file, 'w') as f:
-            json.dump([
-                {
-                    "episode_reward": t["episode_reward"],
-                    "num_turns": t["num_turns"],
-                    "conversation": t["conversation_history"]
-                }
-                for t in successful_trajectories
-            ], f, indent=2)
-
-        if console:
-            console.print(f"[green]Saved {len(successful_trajectories)} successful trajectories to {log_file}[/green]")
-
-    return trajectories

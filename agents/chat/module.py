@@ -83,7 +83,7 @@ class FlightBookingChatAgent:
             'round trip', 'one way', 'return', 'economy', 'business', 'first class'
         ]
     
-    async def initialize(self):
+    def initialize(self):
         """Initialize the chat agent and test MCP connection"""
         # Testing MCP connection...
         connection_ok = await self.mcp_client.test_connection()
@@ -94,7 +94,7 @@ class FlightBookingChatAgent:
         return True
         
 
-    async def _call_llm(self, messages: List[Dict[str, str]]) -> str:
+    def _call_llm(self, messages: List[Dict[str, str]]) -> str:
         """Call the LLM API using OpenAI client with retry logic"""
         chat_completion = self.openai_client.chat.completions.create(
                     model=self.config.model_name,
@@ -105,11 +105,11 @@ class FlightBookingChatAgent:
         )
         return chat_completion.choices[0].message.content
 
-    async def _execute_database_query(self, query: str, params: Optional[List] = None) -> ToolResult:
+    def _execute_database_query(self, query: str, params: Optional[List] = None) -> ToolResult:
         """Execute a database query using MCP client"""
         return await self.mcp_client.query_database(query, params)
     
-    async def _update_booking_context(self, user_message: str) -> None:
+    def _update_booking_context(self, user_message: str) -> None:
         """Use LLM to automatically extract and maintain booking context"""
         # Create prompt for LLM to extract booking information
         extraction_prompt = f"""
@@ -168,7 +168,7 @@ class FlightBookingChatAgent:
             pass
 
 
-    async def _process_user_message(self, user_message: str) -> str:
+    def _process_user_message(self, user_message: str) -> str:
         """Process user message and generate response with LLM-managed state"""
         # Update booking context using LLM
         await self._update_booking_context(user_message)
@@ -202,7 +202,7 @@ class FlightBookingChatAgent:
         has_travel_keyword = any(keyword in text_lower for keyword in self.travel_keywords)
         return has_travel_keyword
 
-    async def _handle_flight_request(self, user_message: str) -> str:
+    def _handle_flight_request(self, user_message: str) -> str:
         """Handle flight-related requests using SQL Coder Agent and MCP queries"""
         # Generating SQL for user message
         
@@ -300,7 +300,7 @@ class FlightBookingChatAgent:
         # No need to add to history here as _process_user_message handles it
         return response
     
-    async def _format_flight_results(self, flights_data: List[Dict], user_query: str) -> str:
+    def _format_flight_results(self, flights_data: List[Dict], user_query: str) -> str:
         """Format flight search results for user display"""
         try:
             # Prepare context for LLM to format the results
@@ -352,7 +352,7 @@ class FlightBookingChatAgent:
         except Exception as e:
             return f"Found {len(flights_data)} flights, but encountered an error formatting the results. Please try your search again."
     
-    async def chat_loop(self):
+    def chat_loop(self):
         """Interactive chat loop for the flight booking agent"""
         print("\n🛫 Welcome to the Flight Booking Assistant!")
         print("I can help you search for flights and make bookings.")
@@ -443,7 +443,7 @@ class FlightBookingChatAgent:
                     return True
         return False
     
-    async def _generate_booking_summary(self) -> str:
+    def _generate_booking_summary(self) -> str:
         """Generate a precise summary of final booking information only"""
         # Use the maintained booking context and conversation history
         summary_prompt = f"""

@@ -73,7 +73,7 @@ class BookingVerifierAgent:
         
         return "\n\n".join(booking_claims)
     
-    async def _call_llm(self, messages: List[Dict[str, str]]) -> str:
+    def _call_llm(self, messages: List[Dict[str, str]]) -> str:
         """Call the LLM API to generate verification queries"""
         response = self.openai_client.chat.completions.create(
             model=self.config.model_name,
@@ -110,7 +110,7 @@ class BookingVerifierAgent:
         query = ' '.join(query.split())
         return query.strip()
     
-    async def generate_verification_queries(self, conversation_history: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    def generate_verification_queries(self, conversation_history: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """
         Generate SQL queries to verify booking claims from conversation
 
@@ -149,6 +149,101 @@ class BookingVerifierAgent:
 
         return queries
     
+    def verify_final_booking_only(self, booking_summary: str, mcp_client, coder_agent) -> Dict[str, Any]:
+        """
+        Verify ONLY the final booking summary by checking if it exists in the database.
+
+        Args:
+            booking_summary: The final booking summary text
+            mcp_client: MCP client instance for database queries
+            coder_agent: Coder agent to convert summary to SQL
+
+        Returns:
+            Dict with verification result and reward (1 if new booking, 0 if exists)
+        """
+
+        # If no booking summary, return no reward
+        if not booking_summary or booking_summary.strip() == "":
+            return {
+                "verification_complete": True,
+                "has_booking_summary": False,
+                "reward": 0,
+                "message": "No booking summary to verify"
+            }
+
+        try:
+            # Use coder agent to convert booking summary to SQL query
+            sql_result = await coder_agent.generate_sql_query(
+                f"Check if this booking exists: {booking_summary}"
+            )
+
+            if not sql_result.get('success') or not sql_result.get('sql_query'):
+                return {
+                    "verification_complete": False,
+                    "has_booking_summary": True,
+                    "reward": 0,
+                    "error": "Could not generate SQL query from booking summary"
+                }
+
+            query = sql_result['sql_query']
+
+            # Execute the query to check if booking exists
+            result = await mcp_client.query_database(query)
+
+            if not result.success:
+                return {
+                    "verification_complete": False,
+                    "has_booking_summary": True,
+                    "reward": 0,
+                    "error": f"Database query failed: {result.error_message}"
+                }
+
+            # Parse the result to check if booking exists
+            try:
+                result_text = result.result.strip()
+                if result_text.startswith('{'):
+                    query_result = json.loads(result_text)
+                    row_count = query_result.get('row_count', 0)
+                else:
+                    row_count = 0
+
+                # Determine reward based on whether booking exists
+                if row_count > 0:
+                    # Booking exists in database - no reward
+                    return {
+                        "verification_complete": True,
+                        "has_booking_summary": True,
+                        "booking_exists": True,
+                        "reward": 0,
+                        "message": "Booking already exists in database",
+                        "matches_found": row_count
+                    }
+                else:
+                    # Booking doesn't exist - give reward
+                    return {
+                        "verification_complete": True,
+                        "has_booking_summary": True,
+                        "booking_exists": False,
+                        "reward": 1,
+                        "message": "New booking - not found in database"
+                    }
+
+            except (json.JSONDecodeError, TypeError) as e:
+                return {
+                    "verification_complete": False,
+                    "has_booking_summary": True,
+                    "reward": 0,
+                    "error": f"Failed to parse database result: {str(e)}"
+                }
+
+        except Exception as e:
+            return {
+                "verification_complete": False,
+                "has_booking_summary": True,
+                "reward": 0,
+                "error": f"Verification failed: {str(e)}"
+            }
+
     async def verify_bookings(self, conversation_history: List[Dict[str, str]], mcp_client) -> Dict[str, Any]:
         """
         Verify all booking claims from the conversation

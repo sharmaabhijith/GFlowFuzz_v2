@@ -21,9 +21,9 @@ import logging
 import json
 from datetime import datetime
 
-# TRL imports for GRPO
+# TRL imports for GRPO with Unsloth
 from trl import GRPOTrainer, GRPOConfig
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from unsloth import FastLanguageModel
 
 # Rich UI components
 from rich.console import Console
@@ -130,26 +130,46 @@ class GRPOAlgorithm:
             push_to_hub=False,
         )
 
-        # Load the model (no value head needed for GRPO)
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-            device_map="auto"
+        # Load model and tokenizer using Unsloth's FastLanguageModel
+        max_seq_length = 2048  # Unsloth auto supports RoPE Scaling internally
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        load_in_4bit = True  # 4bit quantization enabled to save memory space
+
+        # Load base model with Unsloth for efficient training
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=model_name,
+            max_seq_length=max_seq_length,
+            dtype=dtype,
+            load_in_4bit=load_in_4bit,
+        )
+
+        # Prepare model for k-bit training with Unsloth (enables LoRA for efficiency)
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=16,  # LoRA rank - suggested values 8, 16, 32, 64, 128
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                          "gate_proj", "up_proj", "down_proj"],
+            lora_alpha=16,
+            lora_dropout=0,  # Supports any, but = 0 is optimized
+            bias="none",  # Supports any, but = "none" is optimized
+            use_gradient_checkpointing="unsloth",  # True or "unsloth" for very long context
+            random_state=42,
         )
 
         # Load reference model for KL divergence
-        ref_model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-            device_map="auto"
+        ref_model, _ = FastLanguageModel.from_pretrained(
+            model_name=model_name,
+            max_seq_length=max_seq_length,
+            dtype=dtype,
+            load_in_4bit=load_in_4bit,
         )
 
         # Freeze reference model
         for param in ref_model.parameters():
             param.requires_grad = False
 
-        # Initialize tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        # Set tokenizer
+        self.tokenizer = tokenizer
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -215,7 +235,7 @@ class GRPOAlgorithm:
 
         return queries, responses, rewards_tensor
 
-    def train_step(self, trajectories: List[Dict], experience_buffer=None, epoch: int = 0) -> Dict:
+    def train_step(self, trajectories: List[Dict], epoch: int = 0) -> Dict:
         """
         Perform a single GRPO training step with collected trajectories.
 
@@ -223,19 +243,11 @@ class GRPOAlgorithm:
 
         Args:
             trajectories: Fresh trajectories from current rollouts
-            experience_buffer: Optional replay buffer
             epoch: Current training epoch
 
         Returns:
             Dictionary containing training metrics
         """
-        # Mix with experience buffer if configured
-        if experience_buffer and self.config["grpo"].get("use_buffer", False) and epoch > 0:
-            buffer_trajectories = experience_buffer.sample_batch(len(trajectories) // 2)
-            if buffer_trajectories:
-                trajectories.extend(buffer_trajectories)
-                if self.console:
-                    self.console.print(f"[cyan]Added {len(buffer_trajectories)} trajectories from buffer[/cyan]")
 
         # Prepare data for GRPO
         queries, responses, rewards = self.prepare_batch(trajectories)
@@ -302,14 +314,13 @@ class GRPOAlgorithm:
             "num_samples": len(queries)
         }
 
-    def save_checkpoint(self, epoch: int, output_dir: str, experience_buffer=None):
+    def save_checkpoint(self, epoch: int, output_dir: str):
         """
         Save training checkpoint with model and training state.
 
         Args:
             epoch: Current epoch number
             output_dir: Directory to save checkpoint
-            experience_buffer: Optional buffer to save
         """
         checkpoint_dir = Path(output_dir) / f"checkpoint-{epoch}"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -317,10 +328,6 @@ class GRPOAlgorithm:
         # Save model and tokenizer
         self.trainer.model.save_pretrained(checkpoint_dir)
         self.tokenizer.save_pretrained(checkpoint_dir)
-
-        # Save experience buffer if provided
-        if experience_buffer:
-            experience_buffer.save(checkpoint_dir / "buffer.json")
 
         # Save training state
         state_dict = {

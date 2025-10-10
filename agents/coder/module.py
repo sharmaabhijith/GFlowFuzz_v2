@@ -84,7 +84,7 @@ class SQLCoderAgent:
         """Get the city to airport code mapping"""
         return self.city_to_airport.copy()
 
-    async def generate_sql_query(self, user_request: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
+    def generate_sql_query(self, user_request: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
         """
         Convert natural language flight request to SQL query
         

@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import asyncio
 import sys
 import os
@@ -16,6 +14,7 @@ sys.path.append(str(Path(__file__).parent.parent / "agents"))
 
 from agents.chat.module import FlightBookingChatAgent
 from agents.verifier.module import BookingVerifierAgent
+from agents.coder.module import SQLCoderAgent
 
 
 @dataclass
@@ -54,27 +53,35 @@ class BookingConversationEnvironment:
         self.max_conversation_length = config.get('max_conversation_length', 8)
         self.booking_agent_config = config.get('booking_agent_config')
         self.verifier_config = config.get('verifier_config')
+        self.coder_config = config.get('coder_config', {
+            'config_path': 'agents/coder/config.yaml'
+        })
 
         self.logger = logging.getLogger(__name__)
         self.booking_agent = None
         self.verifier_agent = None
+        self.coder_agent = None
         self.current_state = None
         self.conversation_count = 0
         self.total_rewards = []
         self.current_objective = None
         self.is_initialized = False
+        self.final_booking_summary = None
 
-    async def initialize(self):
+    def initialize(self):
         """Initialize the environment and agents"""
         # Initialize booking agent
         chat_config_path = self.booking_agent_config['config_path']
         db_path = self.booking_agent_config['db_path']
         server_path = self.booking_agent_config['server_path']
         self.booking_agent = FlightBookingChatAgent(chat_config_path, db_path, server_path)
-        await self.booking_agent.initialize()
+        self.booking_agent.initialize()
         # Initialize verifier agent
         verifier_config_path = self.verifier_config['config_path']
         self.verifier_agent = BookingVerifierAgent(verifier_config_path)
+        # Initialize coder agent
+        coder_config_path = self.coder_config['config_path']
+        self.coder_agent = SQLCoderAgent(coder_config_path)
         self.is_initialized = True
 
     def reset(self, booking_objective: Optional[str] = None) -> ConversationState:
@@ -93,6 +100,8 @@ class BookingConversationEnvironment:
         if booking_objective is None:
             booking_objective = self._generate_booking_objective()
         self.current_objective = booking_objective
+        # Reset final booking summary
+        self.final_booking_summary = None
         # Reset booking agent
         if self.booking_agent:
             self.booking_agent.conversation_history = []
@@ -111,7 +120,7 @@ class BookingConversationEnvironment:
         )
         return self.current_state
 
-    async def step(self, user_action: str) -> EnvironmentStep:
+    def step(self, user_action: str) -> EnvironmentStep:
         """
         Execute a step in the environment
 
@@ -125,7 +134,7 @@ class BookingConversationEnvironment:
             raise ValueError("Environment is terminated. Call reset() to start a new conversation.")
 
         # Get booking agent response (it handles conversation history internally)
-        booking_response = await self.booking_agent._process_user_message(user_action)
+        booking_response = self.booking_agent._process_user_message(user_action)
         # Update state
         self.current_state.turn_count += 1
         if self.booking_agent:
@@ -133,11 +142,22 @@ class BookingConversationEnvironment:
         # Check if conversation should terminate
         done = self._should_terminate(user_action, booking_response)
         self.current_state.is_terminated = done
+
+        # Generate booking summary when conversation ends
+        if done and not self.final_booking_summary:
+            try:
+                # Generate the final booking summary
+                self.final_booking_summary = self.booking_agent._generate_booking_summary()
+            except Exception as e:
+                self.logger.warning(f"Could not generate booking summary: {e}")
+                self.final_booking_summary = None
+
         # Create info dict
         info = {
             "turn_count": self.current_state.turn_count,
             "booking_objective": self.current_state.booking_objective,
-            "conversation_length": len(self.booking_agent.conversation_history)
+            "conversation_length": len(self.booking_agent.conversation_history),
+            "booking_summary": self.final_booking_summary if done else None
         }
 
         return EnvironmentStep(
@@ -146,13 +166,13 @@ class BookingConversationEnvironment:
             info=info
         )
 
-    async def compute_halluciination_reward(self) -> float:
+    def compute_halluciination_reward(self) -> float:
         """
         Compute reward for the complete trajectory/conversation
 
-        This should be called after the trajectory is complete (done=True).
-        It evaluates the entire conversation based on how well the booking
-        objective was achieved.
+        This checks if the final booking exists in the database:
+        - Reward = 1 if booking doesn't exist (new booking)
+        - Reward = 0 if booking already exists or no booking was made
 
         Returns:
             Reward value as float
@@ -161,14 +181,13 @@ class BookingConversationEnvironment:
         if not self.current_state or not self.current_state.is_terminated:
             self.logger.warning("compute_trajectory_reward called but trajectory not complete")
             return 0.0
-        # Get reward from verifier agent if available
+        # Get reward from verifier agent using final booking only
         if self.verifier_agent:
-            return await self._get_verifier_reward()
+            return self._get_verifier_reward()
         # If no verifier, return a default reward
-        # Could be extended with other reward mechanisms
         return 0
 
-    async def compute_process_reward(self, state: ConversationState, action: str, next_state: ConversationState) -> float:
+    def compute_process_reward(self, state: ConversationState, action: str, next_state: ConversationState) -> float:
         """
         Compute process reward for a single step transition.
 
@@ -200,31 +219,18 @@ class BookingConversationEnvironment:
 
         return reward
 
-    async def compute_terminal_reward(self) -> float:
+    def compute_terminal_reward(self) -> float:
         """
         Compute terminal reward at the end of conversation.
 
-        This is the main reward signal that evaluates the overall success
-        of the conversation in achieving the booking objective.
+        This checks if the final booking exists in the database:
+        - Reward = 1 if booking doesn't exist (new booking)
+        - Reward = 0 if booking already exists or no booking was made
 
         Returns:
             Terminal reward as float
         """
-        # Check if conversation is actually complete
-        if not self.current_state or not self.current_state.is_terminated:
-            self.logger.warning("compute_terminal_reward called but trajectory not complete")
-            return 0.0
-
-        # TODO: Implement terminal reward logic
-        # This will be the main reward signal based on:
-        # - Whether booking objective was achieved
-        # - Quality of the booking made
-        # - Efficiency of the conversation
-        # - User satisfaction metrics
-
-        # For now, delegate to existing reward computation
-        # This maintains backward compatibility while we implement new logic
-        return await self.compute_halluciination_reward()
+        return await self._get_verifier_reward()
 
     def compute_shaped_rewards(self, terminal_reward: float, num_steps: int, gamma: float = 0.99) -> List[float]:
         """
@@ -370,38 +376,34 @@ class BookingConversationEnvironment:
         return user_wants_to_quit or thank_you_closing or booking_complete or max_length_reached
 
 
-    async def _get_verifier_reward(self) -> float:
-        """Get reward from verifier agent with graduated rewards"""
+    def _get_verifier_reward(self) -> float:
+        """Get reward from verifier agent - checks if final booking exists in database"""
 
-        # Get verification report using booking agent's conversation history
-        verification_report = await self.verifier_agent.verify_bookings(
-            self.booking_agent.conversation_history,
-            self.booking_agent.mcp_client
+        # If no booking summary was generated, no reward
+        if not self.final_booking_summary:
+            self.logger.info("No booking summary generated - no reward")
+            return 0
+
+        # Use the new verification method that only checks final booking
+        verification_report = self.verifier_agent.verify_final_booking_only(
+            self.final_booking_summary,
+            self.booking_agent.mcp_client,
+            self.coder_agent
         )
-        # Calculate reward based on verification
-        summary = verification_report.get('summary', {})
-        total_claims = summary.get('total_claims', 0)
-        verified_claims = summary.get('verified', 0)
 
-        if total_claims == 0:
-            # Check if conversation was productive even without booking
-            if len(self.booking_agent.conversation_history) >= 4:
-                return 0.1  # Small reward for engagement
-            return 0  # Neutral if no booking claims and short conversation
+        # Return the reward directly from the verification report
+        reward = verification_report.get('reward', 0)
 
-        # Graduated rewards based on verification rate
-        verification_rate = verified_claims / total_claims
-
-        if verification_rate == 1.0:
-            return 1.0  # Full reward for perfect verification
-        elif verification_rate >= 0.8:
-            return 0.7  # Good performance
-        elif verification_rate >= 0.5:
-            return 0.3  # Partial success
-        elif verification_rate > 0:
-            return 0.1  # Some progress made
+        # Log the verification result
+        if verification_report.get('verification_complete'):
+            if verification_report.get('booking_exists'):
+                self.logger.info(f"Booking exists in database - reward: {reward}")
+            else:
+                self.logger.info(f"New booking (not in database) - reward: {reward}")
         else:
-            return -0.1  # Small penalty for complete failure
+            self.logger.warning(f"Verification failed: {verification_report.get('error', 'Unknown error')}")
+
+        return reward
 
 
     def _generate_booking_objective(self) -> str:

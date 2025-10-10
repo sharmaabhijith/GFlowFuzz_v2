@@ -6,7 +6,7 @@ Acts as a pure function mapping states to actions without maintaining any intern
 """
 
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from unsloth import FastLanguageModel
 from typing import Optional
 from dataclasses import dataclass
 import logging
@@ -50,26 +50,31 @@ class AutoUserAgent:
         self.device = None
 
     def initialize_model(self):
-        """Load the model and tokenizer"""
+        """Load the model and tokenizer using Unsloth"""
         # Determine device
         if self.config.device == "auto":
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(self.config.device)
-        # Load tokenizer
-        tokenizer_name = self.config.tokenizer_name or self.config.model_name
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        # Add padding token if not present
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-        # Load model
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.config.model_name,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-        ).to(self.device)
+
+        # Load model and tokenizer using Unsloth's FastLanguageModel
+        # Unsloth supports 4bit/16bit loading and is optimized for fine-tuning
+        max_seq_length = 2048  # Choose any! Unsloth auto supports RoPE Scaling internally
+        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        load_in_4bit = True  # 4bit quantization enabled to save memory space
+
+        self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+            model_name=self.config.model_name,
+            max_seq_length=max_seq_length,
+            dtype=dtype,
+            load_in_4bit=load_in_4bit,
+        )
+
+        # FastLanguageModel handles padding token automatically
+        # Set model to evaluation mode
         self.model.eval()
 
-    async def get_action(self, state: str) -> str:
+    def get_action(self, state: str) -> str:
         """
         Returns:
             Generated user response (action)
@@ -78,7 +83,7 @@ class AutoUserAgent:
             raise RuntimeError("Model not initialized. Call initialize_model() first.")
 
         # Tokenize the complete state
-        inputs = self.tokenizer.encode(
+        inputs = self.tokenizer(
             state,
             return_tensors="pt",
             max_length=512,  # Larger context window for full state
@@ -86,21 +91,20 @@ class AutoUserAgent:
             padding=True
         ).to(self.device)
 
-        # Generate response
+        # Generate response using Unsloth's optimized generation
         with torch.no_grad():
             outputs = self.model.generate(
-                inputs,
+                **inputs,
                 max_new_tokens=self.config.max_length,
                 temperature=self.config.temperature,
                 top_p=self.config.top_p,
                 do_sample=self.config.do_sample,
                 pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
-                attention_mask=inputs.ne(self.tokenizer.pad_token_id)
+                eos_token_id=self.tokenizer.eos_token_id
             )
 
         # Decode only the generated part
-        generated_tokens = outputs[0][inputs.shape[-1]:]
+        generated_tokens = outputs[0][inputs.input_ids.shape[-1]:]
         response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
         # Clean up response
