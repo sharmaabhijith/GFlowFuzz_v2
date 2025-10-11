@@ -22,7 +22,7 @@ from training.setup import (
     Trajectory, 
     EpisodeMetrics, 
     ConsoleReporter, 
-    save_metrics, 
+    save_metrics,
     load_config
 )
 
@@ -43,9 +43,7 @@ def run_training(config: Dict[str, Any]) -> None:
     reporter = ConsoleReporter(console)
     reporter.show_config(algorithm_name, config)
     algo_config = config[algorithm_name]
-
     output_dir = setup.prepare_output()
-    trajectory_log_dir = output_dir / "trajectory_logs"
 
     console.print(Panel("[bold cyan]Initializing Training Components[/bold cyan]", expand=False))
     environment = setup.environment()
@@ -104,7 +102,7 @@ def run_training(config: Dict[str, Any]) -> None:
                 if not done:
                     state = environment._format_state(step_result.state)
             num_turns = len(states)
-            terminal_reward = environment.compute_terminal_reward()
+            terminal_reward = environment.compute_hallucination_reward()
             shaped_rewards = environment.compute_shaped_rewards(
                 terminal_reward,
                 num_turns,
@@ -129,17 +127,6 @@ def run_training(config: Dict[str, Any]) -> None:
             metrics = EpisodeMetrics.from_trajectory(episode_idx, trajectory, train_metrics)
             history.append(metrics)
             reporter.show_episode(episode_idx, metrics)
-            if metrics.success:
-                log_path = log_dir / f"episode_{trajectory.episode_index:05d}.json"
-                payload = {
-                    "episode_index": trajectory.episode_index,
-                    "terminal_reward": trajectory.terminal_reward,
-                    "booking_summary": trajectory.booking_summary,
-                    "objective": trajectory.objective,
-                    "conversation": trajectory.conversation_history,
-                }
-                with open(log_path, "w") as f:
-                    json.dump(payload, f, indent=2)
             if save_every and (episode_idx % save_every == 0):
                 trainer.save_checkpoint(episode_idx, str(output_dir))
             progress.advance(task, 1)
@@ -150,8 +137,6 @@ def run_training(config: Dict[str, Any]) -> None:
     save_metrics([rec.to_dict() for rec in history], str(output_dir))
 
     reporter.show_final(history, output_dir)
-
-    console.print(f"\n[green]Trajectory logs saved to:[/green] {trajectory_log_dir}")
     console.print("[cyan]Review the logs to understand conversation patterns and success cases.[/cyan]")
 
 

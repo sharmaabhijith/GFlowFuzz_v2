@@ -69,7 +69,7 @@ class SQLCoderAgent:
             return False
         return True
 
-    async def _call_llm(self, messages) -> str:
+    def _call_llm(self, messages) -> str:
         """Call the LLM API to generate SQL"""
         response = self.openai_client.chat.completions.create(
             model=self.config.model_name,
@@ -121,7 +121,7 @@ class SQLCoderAgent:
         ]
         
         # Generate SQL using LLM
-        response = await self._call_llm(messages)
+        response = self._call_llm(messages)
         # Clean and validate the SQL
         sql_query = self._clean_sql_query(response)
         

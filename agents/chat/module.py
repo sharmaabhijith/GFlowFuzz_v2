@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import asyncio
 import json
 import os
 import sys
@@ -86,10 +85,10 @@ class FlightBookingChatAgent:
     def initialize(self):
         """Initialize the chat agent and test MCP connection"""
         # Testing MCP connection...
-        connection_ok = await self.mcp_client.test_connection()
+        connection_ok = self.mcp_client.test_connection()
         if not connection_ok:
             raise RuntimeError("Failed to connect to MCP server")
-        tools = await self.mcp_client.get_available_tools()
+        tools = self.mcp_client.get_available_tools()
         # Successfully connected to MCP server
         return True
         
@@ -107,7 +106,7 @@ class FlightBookingChatAgent:
 
     def _execute_database_query(self, query: str, params: Optional[List] = None) -> ToolResult:
         """Execute a database query using MCP client"""
-        return await self.mcp_client.query_database(query, params)
+        return self.mcp_client.query_database(query, params)
     
     def _update_booking_context(self, user_message: str) -> None:
         """Use LLM to automatically extract and maintain booking context"""
@@ -151,7 +150,7 @@ class FlightBookingChatAgent:
             messages[0]["content"] += "\n\n" + recent_context
         
         try:
-            response = await self._call_llm(messages)
+            response = self._call_llm(messages)
             # Try to parse the response as JSON
             updated_context = json.loads(response)
             
@@ -171,14 +170,14 @@ class FlightBookingChatAgent:
     def _process_user_message(self, user_message: str) -> str:
         """Process user message and generate response with LLM-managed state"""
         # Update booking context using LLM
-        await self._update_booking_context(user_message)
+        self._update_booking_context(user_message)
         
         # Add to conversation history
         self.conversation_history.append({"role": "user", "content": user_message})
         
         # Check if this is a flight-related request
         if self._is_flight_related(user_message):
-            response = await self._handle_flight_request(user_message)
+            response = self._handle_flight_request(user_message)
         else:
             # Regular conversation with booking context
             messages = [
@@ -189,7 +188,7 @@ class FlightBookingChatAgent:
             recent_history = self.conversation_history[-10:] if len(self.conversation_history) > 10 else self.conversation_history
             messages.extend(recent_history)
             
-            response = await self._call_llm(messages)
+            response = self._call_llm(messages)
         
         # Add assistant response to history
         self.conversation_history.append({"role": "assistant", "content": response})
@@ -220,7 +219,7 @@ class FlightBookingChatAgent:
         enriched_history.extend(recent_history)
         
         # Pass enriched context to SQL coder
-        sql_result = await self.sql_coder.generate_sql_query(user_message, enriched_history)
+        sql_result = self.sql_coder.generate_sql_query(user_message, enriched_history)
         
         if not sql_result.get("success"):
             response = "I had trouble understanding your flight search request. Could you please rephrase it with more specific details like departure city, destination, and any dates?"
@@ -229,7 +228,7 @@ class FlightBookingChatAgent:
         
         sql_query = sql_result.get("sql_query")
         # Generated SQL query
-        result = await self._execute_database_query(sql_query)
+        result = self._execute_database_query(sql_query)
         
         if not result.success:
             response = "I encountered an issue while searching for flights. Please try again with different search criteria or check your request details."
@@ -296,7 +295,7 @@ class FlightBookingChatAgent:
             return response
         
         # Format the flight results for the user
-        response = await self._format_flight_results(flights_data, user_message)
+        response = self._format_flight_results(flights_data, user_message)
         # No need to add to history here as _process_user_message handles it
         return response
     
@@ -346,7 +345,7 @@ class FlightBookingChatAgent:
             # Add the current request
             format_prompt.append({"role": "user", "content": f"Please format these flight search results nicely:\n\n{flights_info}"})
             
-            formatted_response = await self._call_llm(format_prompt)
+            formatted_response = self._call_llm(format_prompt)
             return formatted_response
             
         except Exception as e:
@@ -373,7 +372,7 @@ class FlightBookingChatAgent:
                         print("Generating summary of your flight booking conversation...")
                         
                         try:
-                            booking_summary = await self._generate_booking_summary()
+                            booking_summary = self._generate_booking_summary()
                             print("\n" + booking_summary)
                             print("=" * 60)
                             
@@ -393,7 +392,7 @@ class FlightBookingChatAgent:
                         
                         try:
                             # Run verification
-                            verification_report = await self.verifier.verify_bookings(
+                            verification_report = self.verifier.verify_bookings(
                                 self.conversation_history, 
                                 self.mcp_client
                             )
@@ -421,7 +420,7 @@ class FlightBookingChatAgent:
                 if not user_input:
                     continue
                 print("\n🤖 Assistant: ", end="")
-                response = await self._process_user_message(user_input)
+                response = self._process_user_message(user_input)
                 print(response)      
             except KeyboardInterrupt:
                 print("\n\n✈️ Chat ended by user. Thank you for using Flight Booking Assistant!")
@@ -477,7 +476,7 @@ class FlightBookingChatAgent:
         ]
         
         try:
-            summary = await self._call_llm(messages)
+            summary = self._call_llm(messages)
             return summary
         except Exception as e:
             return "Unable to generate booking summary due to an error."

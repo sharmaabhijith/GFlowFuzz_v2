@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os
-import asyncio
 import json
 import sys
 import argparse
@@ -142,7 +141,7 @@ class ProfessionalFlightBookingApp:
                 self.console.print("\n[success]✓ Starting Simulation Mode...[/success]\n")
                 return "user"
                 
-    async def initialize_environment(self) -> bool:
+    def initialize_environment(self) -> bool:
         """Initialize environment with progress indicators"""
         self.console.print()
         self.console.print(Rule("System Initialization", style="cyan"))
@@ -167,26 +166,26 @@ class ProfessionalFlightBookingApp:
             
             for task_name, task_func in tasks:
                 progress.update(main_task, description=f"[cyan]{task_name}...")
-                result = await task_func()
+                result = task_func()
                 if not result:
                     self.console.print(f"\n[error]✗ {task_name} failed[/error]")
                     return False
                 progress.advance(main_task)
-                await asyncio.sleep(0.3)  # Small delay for visual effect
+                time.sleep(0.3)  # Small delay for visual effect
         
         self.console.print("\n[success]✓ All systems initialized successfully![/success]")
         return True
     
-    async def _load_env(self):
+    def _load_env(self):
         """Load environment variables"""
         # Already loaded in __init__, just verify it's loaded
         return True
     
-    async def _verify_api(self):
+    def _verify_api(self):
         """Verify API key exists"""
         return bool(os.environ.get('DEEPINFRA_API_KEY'))
     
-    async def _setup_paths(self):
+    def _setup_paths(self):
         """Set up required paths"""
         self.config_path_chat = os.path.join(self.project_root, "agents", "chat", "config.yaml")
         self.config_path_user = os.path.join(self.project_root, "agents", "user", "config.yaml")
@@ -206,7 +205,7 @@ class ProfessionalFlightBookingApp:
             self.database_path = os.path.join(self.project_root, "database", "flights.db")
         return True
     
-    async def _check_database(self):
+    def _check_database(self):
         """Check if database exists or can be created"""
         db_path = Path(self.database_path)
         if db_path.exists():
@@ -235,7 +234,7 @@ class ProfessionalFlightBookingApp:
                     return True
         return False
     
-    async def run_chat_mode(self):
+    def run_chat_mode(self):
         """Professional chat interface"""
         self.console.print()
         self.console.print(Rule("Interactive Chat Session", style="cyan"))
@@ -256,8 +255,8 @@ class ProfessionalFlightBookingApp:
                 db_path=str(self.database_path),
                 server_path=str(self.server_path)
             )
-            await agent.initialize()
-            await asyncio.sleep(1)  # Visual effect
+            agent.initialize()
+            time.sleep(1)  # Visual effect
             
         # Welcome message
         self.console.print(Panel(
@@ -293,8 +292,8 @@ class ProfessionalFlightBookingApp:
                         "[dim cyan]Processing final message...[/dim cyan]", 
                         spinner="dots12"
                     ):
-                        response = await agent._process_user_message(user_input)
-                        await asyncio.sleep(0.5)
+                        response = agent._process_user_message(user_input)
+                        time.sleep(0.5)
                     
                     # Display response
                     response_panel = Panel(
@@ -307,12 +306,12 @@ class ProfessionalFlightBookingApp:
                     self.console.print(response_panel)
                     
                     # Now handle exit with verification
-                    await self._handle_chat_exit(agent, message_count)
+                    self._handle_chat_exit(agent, message_count)
                     break
                 
                 # Regular exit without thank you
                 elif user_input_lower in ['exit', 'quit', 'bye', 'goodbye', 'q']:
-                    await self._handle_chat_exit(agent, message_count)
+                    self._handle_chat_exit(agent, message_count)
                     break
                 
                 # Help command
@@ -325,8 +324,8 @@ class ProfessionalFlightBookingApp:
                     "[dim cyan]AI is processing your request...[/dim cyan]", 
                     spinner="dots12"
                 ):
-                    response = await agent._process_user_message(user_input)
-                    await asyncio.sleep(0.5)  # Small delay for realism
+                        response = agent._process_user_message(user_input)
+                        time.sleep(0.5)  # Small delay for realism
                 
                 # Display response in professional panel
                 response_panel = Panel(
@@ -340,7 +339,7 @@ class ProfessionalFlightBookingApp:
                 
             except KeyboardInterrupt:
                 if Confirm.ask("\n[warning]Interrupt detected. Exit chat?[/warning]"):
-                    await self._handle_chat_exit(agent, message_count)
+                    self._handle_chat_exit(agent, message_count)
                     break
                 continue
             except Exception as e:
@@ -384,7 +383,7 @@ class ProfessionalFlightBookingApp:
         )
         self.console.print(error_panel)
     
-    async def _handle_chat_exit(self, agent, message_count):
+    def _handle_chat_exit(self, agent, message_count):
         """Handle chat session exit with summary"""
         self.console.print()
         self.console.print(Rule("Session Complete", style="cyan"))
@@ -403,7 +402,7 @@ class ProfessionalFlightBookingApp:
         
         # Generate booking summary if applicable
         if len(agent.conversation_history) > 0 and self._has_booking_claims(agent):
-            await self._generate_session_summary(agent)
+            self._generate_session_summary(agent)
         
         # Farewell message
         farewell = Panel(
@@ -416,14 +415,14 @@ class ProfessionalFlightBookingApp:
         )
         self.console.print("\n", farewell)
     
-    async def _generate_session_summary(self, agent):
+    def _generate_session_summary(self, agent):
         """Generate and display session summary with verification"""
         self.console.print("\n[highlight]📋 Generating Booking Summary...[/highlight]")
         
         try:
             with self.console.status("[dim]Processing conversation history...[/dim]", spinner="dots12"):
-                booking_summary = await agent._generate_booking_summary()
-                await asyncio.sleep(1)
+                booking_summary = agent._generate_booking_summary()
+                time.sleep(1)
             
             summary_panel = Panel(
                 booking_summary,
@@ -440,11 +439,11 @@ class ProfessionalFlightBookingApp:
             try:
                 with self.console.status("[dim]Checking booking details against database...[/dim]", spinner="dots12"):
                     # Run verification using the verifier agent from chat module
-                    verification_report = await agent.verifier.verify_bookings(
+                    verification_report = agent.verifier.verify_bookings(
                         agent.conversation_history, 
                         agent.mcp_client
                     )
-                    await asyncio.sleep(1)
+                    time.sleep(1)
                 
                 # Format and display verification report
                 formatted_report = agent.verifier.format_verification_report(verification_report)
@@ -482,7 +481,7 @@ class ProfessionalFlightBookingApp:
         except Exception as e:
             self.console.print(f"[warning]Could not generate summary: {e}[/warning]")
     
-    async def run_user_mode(self):
+    def run_user_mode(self):
         """Run user simulation mode with professional UI"""
         self.console.print()
         self.console.print(Rule("Automated Simulation Mode", style="magenta"))
@@ -514,22 +513,22 @@ class ProfessionalFlightBookingApp:
                 db_path=str(self.database_path),
                 server_path=str(self.server_path)
             )
-            await chat_agent.initialize()
+            chat_agent.initialize()
             progress.advance(task)
         
         self.console.print("[success]✓ Simulation environment ready![/success]\n")
         
         # Run single simulation
-        results = await self._run_simulations(user_agent, chat_agent, 1)
+        results = self._run_simulations(user_agent, chat_agent, 1)
         
         # Display results
         self._display_simulation_report(results)
         
         # Run verification if there are booking claims
         if self._has_booking_claims(chat_agent):
-            await self._run_simulation_verification(chat_agent)
+            self._run_simulation_verification(chat_agent)
     
-    async def _run_simulations(self, user_agent, chat_agent, iterations=1):
+    def _run_simulations(self, user_agent, chat_agent, iterations=1):
         """Run simulation with progress tracking"""
         results = []
         
@@ -547,7 +546,7 @@ class ProfessionalFlightBookingApp:
             )
                 
             # Run single simulation
-            result = await user_agent.run_user_simulation(chat_agent)
+            result = user_agent.run_user_simulation(chat_agent)
             results.append(result)
             
             progress.advance(main_task)
@@ -592,7 +591,7 @@ class ProfessionalFlightBookingApp:
         # Save detailed report
         self._save_simulation_report(results)
     
-    async def _run_simulation_verification(self, chat_agent):
+    def _run_simulation_verification(self, chat_agent):
         """Run verification after simulation completes"""
         self.console.print()
         self.console.print(Rule("Verification Process", style="orange1"))
@@ -601,8 +600,8 @@ class ProfessionalFlightBookingApp:
             # Generate booking summary first
             self.console.print("\n[highlight]📋 Generating Booking Summary...[/highlight]")
             with self.console.status("[dim]Processing conversation...[/dim]", spinner="dots12"):
-                booking_summary = await chat_agent._generate_booking_summary()
-                await asyncio.sleep(0.5)
+                booking_summary = chat_agent._generate_booking_summary()
+                time.sleep(0.5)
             
             summary_panel = Panel(
                 booking_summary,
@@ -616,11 +615,11 @@ class ProfessionalFlightBookingApp:
             # Run verification
             self.console.print("\n[highlight]🔍 Verifying Against Database...[/highlight]")
             with self.console.status("[dim]Checking booking claims...[/dim]", spinner="dots12"):
-                verification_report = await chat_agent.verifier.verify_bookings(
+                verification_report = chat_agent.verifier.verify_bookings(
                     chat_agent.conversation_history,
                     chat_agent.mcp_client
                 )
-                await asyncio.sleep(0.5)
+                time.sleep(0.5)
             
             # Display verification report
             formatted_report = chat_agent.verifier.format_verification_report(verification_report)
@@ -659,26 +658,26 @@ class ProfessionalFlightBookingApp:
         
         self.console.print(f"\n[success]✓ Detailed report saved to {report_file}[/success]")
                 
-    async def run(self):
+    def run(self):
         """Main application runner"""
         try:
             self.display_welcome()
             
-            if not await self.initialize_environment():
+            if not self.initialize_environment():
                 self.console.print("\n[error]✗ Failed to initialize. Please check your configuration.[/error]")
                 return
             
             # Check if we should start with auto mode (from command line)
             if hasattr(self, 'start_with_auto') and self.start_with_auto:
                 # Skip mode selection and go directly to simulation
-                await self.run_user_mode()
+                self.run_user_mode()
             else:
                 # Ask user to select mode
                 mode = self.select_mode_simple()
                 if mode == "chat":
-                    await self.run_chat_mode()
+                    self.run_chat_mode()
                 else:
-                    await self.run_user_mode()
+                    self.run_user_mode()
                 
         except KeyboardInterrupt:
             self.console.print("\n\n[warning]⚠️ Application terminated by user[/warning]")
@@ -710,7 +709,7 @@ def main():
     app.start_with_auto = args.auto if hasattr(args, 'auto') else False
     
     # Run the application
-    asyncio.run(app.run())
+    app.run()
 
 if __name__ == "__main__":
     main()

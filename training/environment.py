@@ -1,4 +1,3 @@
-import asyncio
 import sys
 import os
 import logging
@@ -166,7 +165,7 @@ class BookingConversationEnvironment:
             info=info
         )
 
-    def compute_halluciination_reward(self) -> float:
+    def compute_hallucination_reward(self) -> float:
         """
         Compute reward for the complete trajectory/conversation
 
@@ -187,50 +186,22 @@ class BookingConversationEnvironment:
         # If no verifier, return a default reward
         return 0
 
-    def compute_process_reward(self, state: ConversationState, action: str, next_state: ConversationState) -> float:
+    def compute_process_reward(
+        self,
+        state: ConversationState,
+        action: str,
+        next_state: ConversationState
+    ) -> float:
         """
-        Compute process reward for a single step transition.
+        Compute process reward for a single transition.
 
-        Process rewards provide immediate feedback during the conversation,
-        helping the agent learn good conversation patterns even before reaching
-        the terminal state.
-
-        Args:
-            state: Current conversation state
-            action: Action taken (user message)
-            next_state: Resulting state after action
-
-        Returns:
-            Process reward as float
+        Currently returns a small shaping bonus to encourage longer dialogs.
         """
-        reward = 0.0
-
-        # TODO: Implement process reward logic
-        # Example ideas for process rewards:
-        # - Reward for maintaining conversation flow
-        # - Reward for providing relevant information
-        # - Penalty for repetitive responses
-        # - Reward for progressing toward booking completion
-        # - Penalty for conversation going off-topic
-
-        # Placeholder implementation - to be filled with actual logic
-        # For now, return a small positive reward for each step to encourage conversation
-        reward = 0.01
-
-        return reward
+        return 0.01
 
     def compute_terminal_reward(self) -> float:
-        """
-        Compute terminal reward at the end of conversation.
-
-        This checks if the final booking exists in the database:
-        - Reward = 1 if booking doesn't exist (new booking)
-        - Reward = 0 if booking already exists or no booking was made
-
-        Returns:
-            Terminal reward as float
-        """
-        return await self._get_verifier_reward()
+        """Expose terminal reward computation for training pipelines."""
+        return self.compute_hallucination_reward()
 
     def compute_shaped_rewards(self, terminal_reward: float, num_steps: int, gamma: float = 0.99) -> List[float]:
         """
@@ -258,94 +229,65 @@ class BookingConversationEnvironment:
 
         return shaped_rewards
 
-    def _format_state(self, conversation_state: ConversationState, use_optimized: bool = True) -> str:
+    def _format_state(self, conversation_state: ConversationState) -> str:
         """
-        Format conversation state for stateless policy with optimization options.
+        Format the conversation state into a concise, structured prompt for the policy.
 
         Args:
             conversation_state: Current state of the conversation
-            use_optimized: If True, use more efficient formatting
 
         Returns:
             Formatted string containing complete context for policy
         """
-        if use_optimized:
-            # More efficient state representation
-            # Use a structured format that's easier to parse
-            state_parts = []
+        state_parts: List[str] = []
 
-            # Compact objective representation
-            state_parts.append(f"[GOAL] {conversation_state.booking_objective}")
+        # Objective / goal
+        goal = conversation_state.booking_objective or "<no objective>"
+        state_parts.append(f"[GOAL] {goal}")
 
-            # Efficient conversation history
-            # Only include last N messages for very long conversations
-            history = self.booking_agent.conversation_history
-            max_history_length = 20  # Keep last 10 exchanges
+        # Conversation history (keep recent turns, truncate long utterances)
+        history = self.booking_agent.conversation_history
+        max_history_length = 30
+        if len(history) > max_history_length:
+            skipped = len(history) - max_history_length
+            state_parts.append(f"[CONTEXT] Earlier conversation truncated ({skipped} messages omitted)")
+            history = history[-max_history_length:]
 
-            if len(history) > max_history_length:
-                # Add summary of earlier conversation
-                state_parts.append(f"[CONTEXT] Earlier: {len(history) - max_history_length} messages exchanged")
-                history = history[-max_history_length:]
-
-            # Compact history format
-            if history:
-                state_parts.append("[DIALOG]")
-                for msg in history:
-                    prefix = "U:" if msg["role"] == "user" else "A:"
-                    # Truncate very long messages
-                    content = msg['content']
-                    if len(content) > 200:
-                        content = content[:197] + "..."
-                    state_parts.append(f"{prefix} {content}")
-            else:
-                state_parts.append("[DIALOG] <start>")
-
-            # Compact context representation
-            if conversation_state.booking_context:
-                ctx = conversation_state.booking_context
-                if ctx.get("current_requirements"):
-                    reqs = ctx['current_requirements']
-                    if reqs:
-                        # Only include non-empty requirements
-                        req_str = ', '.join(f"{k}:{v}" for k, v in reqs.items() if v)
-                        if req_str:
-                            state_parts.append(f"[STATUS] {req_str}")
-
-            # Metadata
-            state_parts.append(f"[TURN] {conversation_state.turn_count + 1}")
-            state_parts.append("[NEXT] User:")
-
-            return "\n".join(state_parts)
+        if history:
+            state_parts.append("[DIALOG]")
+            for msg in history:
+                prefix = "U:" if msg["role"] == "user" else "A:"
+                content = msg["content"]
+                if len(content) > 250:
+                    content = content[:247] + "..."
+                state_parts.append(f"{prefix} {content}")
         else:
-            # Original verbose format (fallback)
-            parts = []
-            parts.append(f"Objective: {conversation_state.booking_objective}")
-            parts.append("")
+            state_parts.append("[DIALOG] <start>")
 
-            if self.booking_agent.conversation_history:
-                parts.append("Conversation History:")
-                for msg in self.booking_agent.conversation_history:
-                    role = "User" if msg["role"] == "user" else "Assistant"
-                    parts.append(f"{role}: {msg['content']}")
-            else:
-                parts.append("Conversation History: [Start of conversation]")
+        # Booking context
+        ctx = conversation_state.booking_context or {}
+        summary = ctx.get("summary")
+        if summary:
+            trimmed_summary = summary if len(summary) <= 250 else summary[:247] + "..."
+            state_parts.append(f"[SUMMARY] {trimmed_summary}")
 
-            if conversation_state.booking_context and any(conversation_state.booking_context.values()):
-                parts.append("")
-                parts.append("Current Booking Status:")
-                if conversation_state.booking_context.get("summary"):
-                    parts.append(f"Summary: {conversation_state.booking_context['summary']}")
-                if conversation_state.booking_context.get("current_requirements"):
-                    reqs = conversation_state.booking_context['current_requirements']
-                    if reqs:
-                        parts.append(f"Requirements: {reqs}")
+        requirements = ctx.get("current_requirements") or {}
+        if requirements:
+            req_items = [f"{k}:{v}" for k, v in requirements.items() if v]
+            if req_items:
+                state_parts.append(f"[REQUIREMENTS] {', '.join(req_items)}")
 
-            parts.append("")
-            parts.append(f"Turn: {conversation_state.turn_count + 1}")
-            parts.append("")
-            parts.append("User:")
+        preferences = ctx.get("preferences") or {}
+        if preferences:
+            pref_items = [f"{k}:{v}" for k, v in preferences.items() if v]
+            if pref_items:
+                state_parts.append(f"[PREFERENCES] {', '.join(pref_items)}")
 
-            return "\n".join(parts)
+        # Metadata for next turn
+        state_parts.append(f"[TURN] {conversation_state.turn_count + 1}")
+        state_parts.append("[NEXT] User:")
+
+        return "\n".join(state_parts)
 
     def _should_terminate(self, user_action: str, booking_response: str) -> bool:
         """Determine if the conversation should terminate"""
@@ -356,20 +298,17 @@ class BookingConversationEnvironment:
             'stop', 'end conversation', 'that\'s all',
             'no more', 'i\'m done', 'cancel'
         ])
-
         # Check if "thank you" is used as a closing statement (with context)
         thank_you_closing = (
             'thank you' in user_action.lower() and
             any(word in user_action.lower() for word in ['bye', 'all', 'done', 'help', 'booking'])
         )
-
         # Check for successful booking completion
         booking_complete = any(indicator in booking_response.lower() for indicator in [
             'booking confirmed', 'reservation complete', 'booking reference',
             'confirmation number', 'all set', 'booking successful',
             'transaction completed', 'payment processed'
         ])
-
         # Check max length
         max_length_reached = self.current_state.turn_count >= self.max_conversation_length
 
@@ -383,17 +322,14 @@ class BookingConversationEnvironment:
         if not self.final_booking_summary:
             self.logger.info("No booking summary generated - no reward")
             return 0
-
         # Use the new verification method that only checks final booking
         verification_report = self.verifier_agent.verify_final_booking_only(
             self.final_booking_summary,
             self.booking_agent.mcp_client,
             self.coder_agent
         )
-
         # Return the reward directly from the verification report
         reward = verification_report.get('reward', 0)
-
         # Log the verification result
         if verification_report.get('verification_complete'):
             if verification_report.get('booking_exists'):

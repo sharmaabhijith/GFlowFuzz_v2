@@ -28,7 +28,11 @@ class MCPClient:
         self.available_tools: List[Dict[str, Any]] = []
         self._tools_loaded = False
 
-    async def execute_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> ToolResult:
+    def execute_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> ToolResult:
+        """Execute a tool call via MCP server (synchronous wrapper)."""
+        return asyncio.run(self._execute_tool_call_async(tool_name, arguments))
+
+    async def _execute_tool_call_async(self, tool_name: str, arguments: Dict[str, Any]) -> ToolResult:
         """Execute a tool call via MCP server"""
         try:
             # Use sys.executable to ensure we use the same Python interpreter
@@ -70,11 +74,7 @@ class MCPClient:
                     except Exception as e:
                         content_text = str(result)
                     
-                    return ToolResult(
-                        tool_name=tool_name,
-                        result=content_text,
-                        success=True
-                    )
+                    return ToolResult(tool_name=tool_name, result=content_text, success=True)
                     
         except Exception as e:
             return ToolResult(
@@ -84,7 +84,11 @@ class MCPClient:
                 error_message=str(e)
             )
 
-    async def get_available_tools(self) -> List[Dict[str, Any]]:
+    def get_available_tools(self) -> List[Dict[str, Any]]:
+        """Get available tools from MCP server (synchronous wrapper)."""
+        return asyncio.run(self._get_available_tools_async())
+
+    async def _get_available_tools_async(self) -> List[Dict[str, Any]]:
         """Get available tools from MCP server"""
         if self._tools_loaded:
             return self.available_tools
@@ -105,11 +109,10 @@ class MCPClient:
                     
                     # Loaded MCP tools successfully
                     return self.available_tools
-                    
-        except Exception as e:
+        except Exception:
             return []
 
-    async def query_database(self, query: str, params: Optional[List] = None, limit: int = 100) -> ToolResult:
+    def query_database(self, query: str, params: Optional[List] = None, limit: int = 100) -> ToolResult:
         """Convenience method for database queries"""
         arguments = {
             "query": query,
@@ -118,33 +121,33 @@ class MCPClient:
         if params:
             arguments["params"] = params
             
-        return await self.execute_tool_call("query_database", arguments)
+        return self.execute_tool_call("query_database", arguments)
 
-    async def get_table_schema(self, table_name: str) -> ToolResult:
+    def get_table_schema(self, table_name: str) -> ToolResult:
         """Get schema for a specific table"""
-        return await self.execute_tool_call("get_table_schema", {"table_name": table_name})
+        return self.execute_tool_call("get_table_schema", {"table_name": table_name})
 
-    async def list_tables(self, include_system_tables: bool = False) -> ToolResult:
+    def list_tables(self, include_system_tables: bool = False) -> ToolResult:
         """List all tables in the database"""
-        return await self.execute_tool_call("list_tables", {"include_system_tables": include_system_tables})
+        return self.execute_tool_call("list_tables", {"include_system_tables": include_system_tables})
 
-    async def describe_database(self) -> ToolResult:
+    def describe_database(self) -> ToolResult:
         """Get comprehensive database overview"""
-        return await self.execute_tool_call("describe_database", {})
+        return self.execute_tool_call("describe_database", {})
 
-    async def search_tables(self, search_term: str, search_type: str = "both") -> ToolResult:
+    def search_tables(self, search_term: str, search_type: str = "both") -> ToolResult:
         """Search for tables containing specific terms"""
-        return await self.execute_tool_call("search_tables", {
+        return self.execute_tool_call("search_tables", {
             "search_term": search_term,
             "search_type": search_type
         })
 
-    async def test_connection(self) -> bool:
+    def test_connection(self) -> bool:
         """Test if MCP server connection is working"""
         try:
-            tools = await self.get_available_tools()
+            tools = self.get_available_tools()
             return len(tools) > 0
-        except Exception as e:
+        except Exception:
             return False
 
     def get_tools_description(self) -> str:
@@ -164,9 +167,9 @@ class MCPClient:
         return description
 
 # Convenience function for backwards compatibility
-async def create_mcp_client(server_script_path: str, database_path: str) -> MCPClient:
+def create_mcp_client(server_script_path: str, database_path: str) -> MCPClient:
     """Create and initialize MCP client"""
     client = MCPClient(server_script_path, database_path)
     # Pre-load available tools
-    await client.get_available_tools()
+    client.get_available_tools()
     return client

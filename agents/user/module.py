@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import asyncio
 import json
 import os
 import sys
@@ -11,6 +10,7 @@ from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from openai import OpenAI
+import time
 from dotenv import load_dotenv
 
 # Rich imports for beautiful console output
@@ -77,7 +77,7 @@ class FlightBookingUserAgent:
         self.booking_objective: str = ""
         self.has_greeted = False
     
-    async def _call_llm(self, messages: List[Dict[str, str]]) -> str:
+    def _call_llm(self, messages: List[Dict[str, str]]) -> str:
         """Call the LLM API for generating user messages"""
         chat_completion = self.openai_client.chat.completions.create(
             model=self.config.model_name,
@@ -88,7 +88,7 @@ class FlightBookingUserAgent:
         )
         return chat_completion.choices[0].message.content
     
-    async def generate_booking_objective(self) -> str:
+    def generate_booking_objective(self) -> str:
         """Generate a random booking objective for this conversation"""
         prompt = """Generate a simple, realistic flight booking request that a user might have.
         Include basic details like:
@@ -110,9 +110,9 @@ class FlightBookingUserAgent:
             {"role": "user", "content": prompt}
         ]
         
-        return await self._call_llm(messages)
+        return self._call_llm(messages)
     
-    async def generate_user_message(self, context: Dict[str, Any]) -> str:
+    def generate_user_message(self, context: Dict[str, Any]) -> str:
         """Generate a natural user message based on conversation context"""
         
         # Build context from conversation history
@@ -144,7 +144,7 @@ class FlightBookingUserAgent:
             {"role": "user", "content": prompt}
         ]
         
-        return await self._call_llm(messages)
+        return self._call_llm(messages)
     
     def should_end_conversation(self) -> bool:
         """Determine if the conversation should end based on context"""
@@ -173,11 +173,11 @@ class FlightBookingUserAgent:
         
         return False
     
-    async def simulate_booking_conversation(self, chat_agent: FlightBookingChatAgent) -> Dict[str, Any]:
+    def simulate_booking_conversation(self, chat_agent: FlightBookingChatAgent) -> Dict[str, Any]:
         """Simulate a complete booking conversation with the chat agent"""
         
         # Generate random booking objective
-        self.booking_objective = await self.generate_booking_objective()
+        self.booking_objective = self.generate_booking_objective()
         self.conversation_history = []
         self.has_greeted = False
         
@@ -202,7 +202,7 @@ class FlightBookingUserAgent:
                 user_message = "Great, thank you for your help! quit"
             else:
                 # Generate user message based on context
-                user_message = await self.generate_user_message({
+                user_message = self.generate_user_message({
                     "turn": turn,
                     "history": self.conversation_history
                 })
@@ -234,7 +234,7 @@ class FlightBookingUserAgent:
             
             # Get response from chat agent
             try:
-                response = await chat_agent._process_user_message(user_message)
+                response = chat_agent._process_user_message(user_message)
                 
                 # Display assistant response
                 assistant_text = Text()
@@ -258,7 +258,7 @@ class FlightBookingUserAgent:
                 self.conversation_history.append({"role": "assistant", "content": response})
                 
                 # Small delay to simulate thinking
-                await asyncio.sleep(1)
+                time.sleep(1)
                 
             except Exception as e:
                 self.console.print(f"[red]Error: {e}[/red]")
@@ -275,7 +275,7 @@ class FlightBookingUserAgent:
             
             # Send quit message to chat agent
             try:
-                await chat_agent._process_user_message(quit_message)
+                chat_agent._process_user_message(quit_message)
             except:
                 pass
         
@@ -287,7 +287,7 @@ class FlightBookingUserAgent:
             "conversation_history": self.conversation_history
         }
     
-    async def run_user_simulation(self, chat_agent: FlightBookingChatAgent) -> Dict[str, Any]:
+    def run_user_simulation(self, chat_agent: FlightBookingChatAgent) -> Dict[str, Any]:
         """Run a single user simulation"""
         self.console.print()
         self.console.print(Panel(
@@ -296,7 +296,7 @@ class FlightBookingUserAgent:
             border_style="magenta"
         ))
         
-        result = await self.simulate_booking_conversation(chat_agent)
+        result = self.simulate_booking_conversation(chat_agent)
         
         # Display summary
         self.console.print()

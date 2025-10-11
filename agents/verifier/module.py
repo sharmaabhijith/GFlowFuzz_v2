@@ -139,7 +139,7 @@ class BookingVerifierAgent:
         ]
 
         # Generate verification queries using LLM
-        response = await self._call_llm(messages)
+        response = self._call_llm(messages)
         queries = self._parse_verification_queries(response)
 
         # Clean each query
@@ -173,7 +173,7 @@ class BookingVerifierAgent:
 
         try:
             # Use coder agent to convert booking summary to SQL query
-            sql_result = await coder_agent.generate_sql_query(
+            sql_result = coder_agent.generate_sql_query(
                 f"Check if this booking exists: {booking_summary}"
             )
 
@@ -188,7 +188,7 @@ class BookingVerifierAgent:
             query = sql_result['sql_query']
 
             # Execute the query to check if booking exists
-            result = await mcp_client.query_database(query)
+            result = mcp_client.query_database(query)
 
             if not result.success:
                 return {
@@ -244,7 +244,7 @@ class BookingVerifierAgent:
                 "error": f"Verification failed: {str(e)}"
             }
 
-    async def verify_bookings(self, conversation_history: List[Dict[str, str]], mcp_client) -> Dict[str, Any]:
+    def verify_bookings(self, conversation_history: List[Dict[str, str]], mcp_client) -> Dict[str, Any]:
         """
         Verify all booking claims from the conversation
         
@@ -257,7 +257,7 @@ class BookingVerifierAgent:
         """
         
         # Generate verification queries
-        verification_queries = await self.generate_verification_queries(conversation_history)
+        verification_queries = self.generate_verification_queries(conversation_history)
         
         if not verification_queries:
             return {
@@ -276,7 +276,7 @@ class BookingVerifierAgent:
                 continue
             
             # Execute verification query
-            result = await mcp_client.query_database(query)
+            result = mcp_client.query_database(query)
             
             if not result.success:
                 verification_results.append({
