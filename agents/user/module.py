@@ -173,11 +173,20 @@ class FlightBookingUserAgent:
         
         return False
     
-    def simulate_booking_conversation(self, chat_agent: FlightBookingChatAgent) -> Dict[str, Any]:
-        """Simulate a complete booking conversation with the chat agent"""
+    def simulate_booking_conversation(
+        self,
+        chat_agent: FlightBookingChatAgent,
+        objective: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Simulate a complete booking conversation with the chat agent.
+
+        Args:
+            chat_agent: The agent to converse with.
+            objective: Optional pre-defined objective to use for the session.
+        """
         
-        # Generate random booking objective
-        self.booking_objective = self.generate_booking_objective()
+        # Establish booking objective
+        self.booking_objective = objective or self.generate_booking_objective()
         self.conversation_history = []
         self.has_greeted = False
         
@@ -287,8 +296,12 @@ class FlightBookingUserAgent:
             "conversation_history": self.conversation_history
         }
     
-    def run_user_simulation(self, chat_agent: FlightBookingChatAgent) -> Dict[str, Any]:
-        """Run a single user simulation"""
+    def run_user_simulation(
+        self,
+        chat_agent: FlightBookingChatAgent,
+        objective: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Run a single user simulation."""
         self.console.print()
         self.console.print(Panel(
             "[bold magenta]Starting Natural User Conversation Simulation[/bold magenta]",
@@ -296,7 +309,7 @@ class FlightBookingUserAgent:
             border_style="magenta"
         ))
         
-        result = self.simulate_booking_conversation(chat_agent)
+        result = self.simulate_booking_conversation(chat_agent, objective=objective)
         
         # Display summary
         self.console.print()

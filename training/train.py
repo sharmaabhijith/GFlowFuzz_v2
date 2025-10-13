@@ -17,18 +17,38 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 from rich.logging import RichHandler   
-from training.setup import (
-    TrainingSetup, 
-    Trajectory, 
-    EpisodeMetrics, 
-    ConsoleReporter, 
-    save_metrics,
-    load_config
-)
 
-project_root = Path(__file__).parent.parent
+# Ensure a writable HF cache BEFORE importing modules that touch HF Hub
+def _ensure_writable_hf_cache() -> None:
+    try:
+        user_cache = Path.home() / "hf_cache"
+        hub = user_cache / "hub"
+        datasets = user_cache / "datasets"
+        for p in (hub, datasets):
+            p.mkdir(parents=True, exist_ok=True)
+
+        os.environ["HF_HOME"] = str(user_cache)
+        os.environ["HUGGINGFACE_HUB_CACHE"] = str(hub)
+        os.environ["TRANSFORMERS_CACHE"] = str(hub)
+        os.environ["HF_DATASETS_CACHE"] = str(datasets)
+    except Exception:
+        # Best effort; do not block startup if this fails
+        pass
+
+_ensure_writable_hf_cache()
+
+project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
+    sys.path.insert(0, str(project_root))
+
+from training.setup import (
+    TrainingSetup,
+    Trajectory,
+    EpisodeMetrics,
+    save_metrics,
+    load_config,
+)
+from training.utils import BookingObjectiveGenerator, ConsoleReporter
 
 
 def run_training(config: Dict[str, Any]) -> None:
@@ -50,12 +70,18 @@ def run_training(config: Dict[str, Any]) -> None:
     policy = setup.policy()
     trainer = setup.trainer()
 
+    objective_generator_cfg = config.get("objective_generator", {})
+    env_cfg = config.get("environment", {})
+    db_path = env_cfg.get("booking_agent_config", {}).get("db_path")
+    objective_generator = BookingObjectiveGenerator(
+        db_path=db_path,
+        config=objective_generator_cfg,
+        logger=logging.getLogger(__name__),
+    )
+
     gamma = algo_config.get("gamma", 0.99)
     save_every = algo_config.get("save_freq", 0)
-    total_episodes = algo_config.get("total_episodes")
-    if total_episodes is None:
-        total_episodes = algo_config.get("max_epochs", 1) * algo_config.get("max_conversations_per_epoch", 1)
-        total_episodes = max(1, total_episodes)
+    total_episodes = algo_config.get("episodes")
 
     history: List[EpisodeMetrics] = []
 
@@ -79,7 +105,20 @@ def run_training(config: Dict[str, Any]) -> None:
                     expand=False,
                 )
             )
-            state_obj = environment.reset()
+            episode_objective = (
+                objective_generator.generate() if objective_generator else None
+            )
+            if episode_objective:
+                console.print(
+                    Panel(
+                        f"[bold cyan]Objective[/bold cyan]\n{episode_objective}",
+                        title="[yellow]Episode Goal[/yellow]",
+                        expand=False,
+                    )
+                )
+            state_obj = environment.reset(booking_objective=episode_objective)
+            if episode_objective and getattr(state_obj, "booking_objective", None) != episode_objective:
+                state_obj.booking_objective = episode_objective
             state = environment._format_state(state_obj)
             states: List[str] = []
             actions: List[str] = []
@@ -97,6 +136,10 @@ def run_training(config: Dict[str, Any]) -> None:
                     }
                 )
                 step_result = environment.step(action)
+
+                assistant_reply = environment.booking_agent.conversation_history[-1].get("content")
+                reporter.show_turn(episode_idx, len(conversation_history), action, assistant_reply)
+
                 done = step_result.done
                 state_obj = step_result.state
                 if not done:
@@ -118,7 +161,7 @@ def run_training(config: Dict[str, Any]) -> None:
                 num_turns=num_turns,
                 conversation_history=conversation_history,
                 booking_summary=getattr(environment, "final_booking_summary", None),
-                objective=getattr(state_obj, "booking_objective", None),
+                objective=episode_objective or getattr(state_obj, "booking_objective", None),
             )
             train_metrics = trainer.train_step(
                 trajectories=[trajectory.to_dict()],

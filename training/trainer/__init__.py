@@ -13,9 +13,10 @@ Available Algorithms:
 - [Future] A2C (Advantage Actor-Critic)
 """
 
-from .ppo import PPOAlgorithm, collect_trajectories
+from .ppo import PPOAlgorithm
+from .grpo import GRPOAlgorithm
 
 __all__ = [
-    'PPOAlgorithm',
-    'collect_trajectories'
+    "PPOAlgorithm",
+    "GRPOAlgorithm",
 ]

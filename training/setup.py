@@ -6,14 +6,14 @@ from pathlib import Path
 from typing import Dict, Optional, List, Any
 from dataclasses import dataclass, field
 
-from rich import box
-from rich.table import Table
 from rich.console import Console
 
-from training.environment import BookingConversationEnvironment
-from agents.auto_user.module import AutoUserAgent, AutoUserConfig
-from training.trainer.ppo import PPOAlgorithm
-from training.trainer.grpo import GRPOAlgorithm
+from .environment import BookingConversationEnvironment
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+from agents.auditor.module import AuditorAgent, AuditorConfig
+from .trainer.ppo import PPOAlgorithm
+from .trainer.grpo import GRPOAlgorithm
 
 
 def load_config(config_path: str) -> Dict:
@@ -139,16 +139,55 @@ class TrainingSetup:
         self.config = config
         self.console = console or Console()
         self._environment: Optional[BookingConversationEnvironment] = None
-        self._policy: Optional[AutoUserAgent] = None
+        self._policy: Optional[AuditorAgent] = None
         self._trainer: Optional[PPOAlgorithm | GRPOAlgorithm] = None
         self._output_dir: Optional[Path] = None
+        self._auditor_config: Optional[Dict[str, Any]] = None
+
+    def resolve_path(self, path: Path | str | None, *, default: Path | str | None = None) -> Path:
+        """Resolve a config path relative to the project root."""
+        if path is None:
+            if default is None:
+                raise ValueError("Cannot resolve an empty path without a default.")
+            return self.resolve_path(default)
+
+        candidate = Path(path)
+        return candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
+
+    def get_booking_agent_paths(self) -> Dict[str, Path]:
+        """Return resolved paths required by the booking chat agent."""
+        env_cfg = self.config.get("environment", {})
+        booking_cfg = env_cfg.get("booking_agent_config", {})
+        return {
+            "config_path": self.resolve_path(booking_cfg.get("config_path"), default="agents/chat/config.yaml"),
+            "db_path": self.resolve_path(booking_cfg.get("db_path"), default="database/flights.db"),
+            "server_path": self.resolve_path(booking_cfg.get("server_path"), default="mcp-server/database_server.py"),
+        }
+
+    def get_verifier_config_path(self) -> Path:
+        """Return the resolved verifier configuration path."""
+        env_cfg = self.config.get("environment", {})
+        verifier_cfg = env_cfg.get("verifier_config", {})
+        return self.resolve_path(verifier_cfg.get("config_path"), default="agents/verifier/config.yaml")
+
+    def get_user_agent_config_path(self) -> Path:
+        """Return the resolved user agent configuration path."""
+        env_cfg = self.config.get("environment", {})
+        user_cfg_path = env_cfg.get("user_agent_config_path", "agents/user/config.yaml")
+        return self.resolve_path(user_cfg_path)
+
+    def ensure_database(self) -> Path:
+        """Ensure the flights database directory exists and return its path."""
+        db_path = self.get_booking_agent_paths()["db_path"]
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        return db_path
 
     def configure_hf_caches(self) -> None:
         """Ensure Hugging Face cache paths are set to consistent locations."""
         hf_cache = Path(os.environ.get("HF_HOME", Path.home() / "hf_cache"))
         os.environ.setdefault("HF_HOME", str(hf_cache))
         os.environ.setdefault("TRANSFORMERS_CACHE", str(hf_cache / "hub"))
-        os.environ.setdefault("HF_HUB_CACHE", str(hf_cache / "hub"))
+        os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(hf_cache / "hub"))
         os.environ.setdefault("HF_DATASETS_CACHE", str(hf_cache / "datasets"))
 
     def prepare_output(self) -> Path:
@@ -171,25 +210,26 @@ class TrainingSetup:
     def environment(self) -> BookingConversationEnvironment:
         if self._environment is None:
             env_cfg = self.config["environment"]
-            env = BookingConversationEnvironment(config=env_cfg, auto_user_config=None)
+            env = BookingConversationEnvironment(config=env_cfg, auditor_config=None)
             env.initialize()
             self.console.print("[green]✓[/green] Environment initialized")
             self._environment = env
         return self._environment
 
-    def policy(self) -> AutoUserAgent:
+    def policy(self) -> AuditorAgent:
         if self._policy is None:
-            mcfg = self.config["model"]
-            policy_cfg = AutoUserConfig(
-                model_name=mcfg["base_model"],
-                tokenizer_name=mcfg.get("tokenizer", mcfg["base_model"]),
-                max_length=mcfg["max_response_length"],
-                temperature=0.7,
-                top_p=0.9,
-                do_sample=True,
-                device=mcfg.get("device", "auto"),
+            cfg_path = self.config["environment"]["auditor"]["config_path"]
+            auditor_cfg = load_config(str(cfg_path))
+            policy_cfg = AuditorConfig(
+                model_name=auditor_cfg["model_name"],
+                max_length=auditor_cfg["max_response_length"],
+                temperature=auditor_cfg.get("temperature", 0.7),
+                top_p=auditor_cfg.get("top_p", 0.9),
+                do_sample=auditor_cfg.get("do_sample", True),
+                device=auditor_cfg.get("device", "auto"),
+                system_prompt=auditor_cfg.get("system_prompt", ""),
             )
-            policy = AutoUserAgent(policy_cfg)
+            policy = AuditorAgent(policy_cfg)
             policy.initialize_model()
             self.console.print("[green]✓[/green] Policy model loaded")
             self._policy = policy
@@ -210,69 +250,3 @@ class TrainingSetup:
     @property
     def output_dir(self) -> Optional[Path]:
         return self._output_dir
-
-
-class ConsoleReporter:
-    """Generalized console display helper for training.
-
-    Provides consistent, reusable rendering for config, per-episode summaries,
-    and final results.
-    """
-
-    def __init__(self, console: Optional[Console] = None):
-        self.console = console or Console()
-
-    def show_config(self, algorithm_name: str, config: Dict[str, Any]) -> None:
-        algo_config = config[algorithm_name]
-        table = Table(title="Training Configuration", box=box.ROUNDED)
-        table.add_column("Parameter", style="cyan")
-        table.add_column("Value", style="green")
-        table.add_row("Algorithm", algorithm_name.upper())
-        table.add_row("Model", config["model"]["base_model"])
-        table.add_row("Learning Rate", str(algo_config.get("learning_rate")))
-        table.add_row("Batch Size", str(algo_config.get("batch_size")))
-        total_eps = algo_config.get(
-            "total_episodes",
-            algo_config.get("max_epochs", 1) * algo_config.get("max_conversations_per_epoch", 1),
-        )
-        table.add_row("Total Episodes", str(total_eps))
-        self.console.print(table)
-        self.console.print()
-
-    def show_episode(self, episode_index: int, metrics: EpisodeMetrics, extra: Optional[Dict[str, Any]] = None) -> None:
-        table = Table(title=f"Episode {episode_index} Summary", box=box.SIMPLE)
-        table.add_column("Metric", style="cyan")
-        table.add_column("Value", style="green")
-        table.add_row("Terminal Reward", f"{metrics.terminal_reward:.3f}")
-        table.add_row("Shaped Reward (mean)", f"{metrics.shaped_reward_mean:.3f}")
-        table.add_row("Steps", str(metrics.total_steps))
-        table.add_row("Loss", f"{metrics.algo_loss:.4f}")
-        table.add_row("KL Divergence", f"{metrics.kl_divergence:.4f}")
-        if metrics.policy_loss:
-            table.add_row("Policy Loss", f"{metrics.policy_loss:.4f}")
-        if metrics.value_loss:
-            table.add_row("Value Loss", f"{metrics.value_loss:.4f}")
-        if extra:
-            for k, v in extra.items():
-                table.add_row(k, f"{v}")
-        self.console.print(table)
-        self.console.print()
-
-    def show_final(self, history: List[EpisodeMetrics], output_dir: Path) -> None:
-        table = Table(title="Training Results", box=box.DOUBLE)
-        table.add_column("Metric", style="cyan")
-        table.add_column("Value", style="green")
-        if history:
-            final = history[-1]
-            avg_terminal = sum(rec.terminal_reward for rec in history) / len(history)
-            avg_shaped = sum(rec.shaped_reward_mean for rec in history) / len(history)
-            success_rate = sum(1 for rec in history if rec.success) / len(history)
-            total_steps = sum(rec.total_steps for rec in history)
-            table.add_row("Final Episode", str(final.episode_index))
-            table.add_row("Final Terminal Reward", f"{final.terminal_reward:.3f}")
-            table.add_row("Avg Terminal Reward", f"{avg_terminal:.3f}")
-            table.add_row("Avg Shaped Reward", f"{avg_shaped:.3f}")
-            table.add_row("Success Rate", f"{success_rate:.1%}")
-            table.add_row("Total Steps", str(total_steps))
-        table.add_row("Model Saved To", str(output_dir))
-        self.console.print(table)

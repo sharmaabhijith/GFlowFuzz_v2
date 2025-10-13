@@ -2,10 +2,8 @@ import sys
 import os
 import logging
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
-import numpy as np
-import random
 
 # Add parent directories to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -39,16 +37,16 @@ class BookingConversationEnvironment:
     Combines functionality from both original environment files.
     """
 
-    def __init__(self, config: Dict[str, Any], auto_user_config=None):
+    def __init__(self, config: Dict[str, Any], auditor_config=None):
         """
         Initialize the environment
 
         Args:
             config: Environment configuration dictionary
-            auto_user_config: Configuration for auto user agent (optional)
+            auditor_config: Configuration for auditor agent (optional)
         """
         self.config = config
-        self.auto_user_config = auto_user_config
+        self.auditor_config = auditor_config
         self.max_conversation_length = config.get('max_conversation_length', 8)
         self.booking_agent_config = config.get('booking_agent_config')
         self.verifier_config = config.get('verifier_config')
@@ -343,34 +341,6 @@ class BookingConversationEnvironment:
 
 
     def _generate_booking_objective(self) -> str:
-        """Generate random booking objective"""
-        templates = [
-            "I need to fly from {origin} to {destination} in {month} 2026",
-            "Looking for a {class_type} class ticket from {origin} to {destination}",
-            "I want to book a flight to {destination} for {num} people",
-            "Need a direct flight from {origin} to {destination} next {month}",
-            "Can you help me find flights to {destination} in {month}?",
-            "I'm planning a trip to {destination} from {origin}",
-            "Looking for the cheapest flight to {destination}",
-            "I need to travel to {destination} for business in {month}"
-        ]
-
-        origins = ["New York", "Los Angeles", "Chicago", "Miami", "Boston",
-                  "Seattle", "San Francisco", "Denver", "Dallas", "Atlanta"]
-        destinations = ["London", "Paris", "Tokyo", "Sydney", "Dubai",
-                       "Singapore", "Hong Kong", "Rome", "Barcelona", "Amsterdam"]
-        months = ["January", "February", "March", "April", "May", "June",
-                 "July", "August", "September", "October", "November", "December"]
-        class_types = ["economy", "business", "first"]
-        nums = ["2", "3", "4"]
-
-        template = random.choice(templates)
-        objective = template.format(
-            origin=random.choice(origins),
-            destination=random.choice(destinations),
-            month=random.choice(months),
-            class_type=random.choice(class_types),
-            num=random.choice(nums)
-        )
-
-        return objective
+        """Generate a simple fallback booking objective if none is provided."""
+        self.logger.warning("No booking objective provided; using fallback objective")
+        return "I need to fly from New York to London in March 2026."

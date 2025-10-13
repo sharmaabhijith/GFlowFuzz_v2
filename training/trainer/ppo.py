@@ -22,9 +22,9 @@ import logging
 import json
 from datetime import datetime
 
-# TRL imports for PPO with Unsloth
+# TRL imports for PPO (HF Transformers)
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
-from unsloth import FastLanguageModel
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # Rich UI components
 from rich.console import Console
@@ -75,88 +75,10 @@ class PPOAlgorithm:
         Returns:
             Configured PPO trainer ready for optimization
         """
-        ppo_params = self.config["ppo"]
-        model_name = policy_agent.config.model_name
-        tokenizer_name = policy_agent.config.tokenizer_name or model_name
-
-        # PPO hyperparameter configuration with careful defaults
-        ppo_config = PPOConfig(
-            model_name=model_name,
-            learning_rate=ppo_params["learning_rate"],  # Typically 1e-5 to 1e-4 for LLMs
-            batch_size=ppo_params["batch_size"],  # Total batch size across all devices
-            mini_batch_size=ppo_params["mini_batch_size"],  # Size for gradient updates
-            gradient_accumulation_steps=ppo_params.get("gradient_accumulation_steps", 1),
-            ppo_epochs=ppo_params["ppo_epochs"],  # Number of optimization epochs per batch
-            gamma=ppo_params["gamma"],  # Discount factor for future rewards (0.99 = long-term focus)
-            lam=ppo_params["lam"],  # GAE lambda for advantage estimation (balance bias/variance)
-            cliprange=ppo_params["cliprange"],  # PPO clipping to prevent large policy updates
-            cliprange_value=ppo_params.get("cliprange_value", 0.2),  # Value function clipping
-            vf_coef=ppo_params["vf_coef"],  # Weight of value function loss in total loss
-            seed=42,  # Fixed seed for reproducibility
-            log_with="tensorboard",  # Enable tensorboard logging for monitoring
-            tracker_project_name="ppo_conversation_policy",
-            remove_unused_columns=False,  # Keep all data columns for debugging
-            optimize_cuda_cache=True,  # Memory optimization for large models
-            early_stopping=ppo_params.get("early_stopping", False),  # Stop if KL diverges
-            target_kl=ppo_params.get("target_kl", 0.1)  # KL divergence threshold
+        raise NotImplementedError(
+            "PPO trainer has not been ported to TRL 0.23 with pure Hugging Face in this repo. "
+            "Please set algorithm: grpo in your config or ask me to implement PPO migration."
         )
-
-        # Load model and tokenizer using Unsloth's FastLanguageModel
-        max_seq_length = 2048  # Unsloth auto supports RoPE Scaling internally
-        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        load_in_4bit = True  # 4bit quantization enabled to save memory space
-
-        # Load base model with Unsloth for efficient training
-        base_model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=model_name,
-            max_seq_length=max_seq_length,
-            dtype=dtype,
-            load_in_4bit=load_in_4bit,
-        )
-
-        # Prepare model for k-bit training with Unsloth (enables LoRA for efficiency)
-        base_model = FastLanguageModel.get_peft_model(
-            base_model,
-            r=16,  # LoRA rank - suggested values 8, 16, 32, 64, 128
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                          "gate_proj", "up_proj", "down_proj"],
-            lora_alpha=16,
-            lora_dropout=0,  # Supports any, but = 0 is optimized
-            bias="none",  # Supports any, but = "none" is optimized
-            use_gradient_checkpointing="unsloth",  # True or "unsloth" for very long context
-            random_state=42,
-        )
-
-        # Wrap with value head for PPO (Actor-Critic architecture)
-        model_with_value = AutoModelForCausalLMWithValueHead.from_pretrained(base_model)
-
-        # Reference model: We need a frozen copy for KL divergence
-        # Load a separate instance for the reference model
-        ref_model, _ = FastLanguageModel.from_pretrained(
-            model_name=model_name,
-            max_seq_length=max_seq_length,
-            dtype=dtype,
-            load_in_4bit=load_in_4bit,
-        )
-
-        # Freezing ensures reference distribution remains constant during training
-        for param in ref_model.parameters():
-            param.requires_grad = False
-
-        # Create PPO trainer with all model components
-        self.trainer = PPOTrainer(
-            config=ppo_config,
-            model=model_with_value,
-            ref_model=ref_model,
-            tokenizer=tokenizer  # Use the tokenizer from FastLanguageModel
-        )
-
-        self.tokenizer = tokenizer
-
-        if self.console:
-            self.console.print("[green]✓[/green] PPO trainer initialized successfully")
-
-        return self.trainer
 
     def prepare_batch(self, trajectories: List[Dict]) -> Tuple[List, List, torch.Tensor]:
         """

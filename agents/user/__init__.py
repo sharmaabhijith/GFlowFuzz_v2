@@ -1,10 +1,7 @@
 """Flight Booking Auditor Agent Module"""
 
-from .module import FlightBookingAuditorAgent, TestScenario, TestResult, TestScenarioType
+from .module import FlightBookingUserAgent
 
 __all__ = [
-    'FlightBookingAuditorAgent',
-    'TestScenario', 
-    'TestResult',
-    'TestScenarioType'
+    'FlightBookingUserAgent',
 ]

@@ -10,22 +10,8 @@ environment:
     server_path: "mcp-server/database_server.py"
   verifier_config:
     config_path: "agents/verifier/config.yaml"
-
-# Model Configuration
-model:
-  base_model: "Qwen/Qwen3-4B"
-  tokenizer: "Qwen/Qwen3-4B"
-  max_response_length: 30
-  device: "auto"
-
-# Auto User Agent Configuration
-auto_user:
-  model_name: "Qwen/Qwen3-4B"
-  tokenizer_name: "Qwen/Qwen3-4B"
-  temperature: 0.7
-  max_tokens: 100
-  top_p: 0.9
-  repetition_penalty: 1.1
+  auditor:
+    config_path: "agents/auditor/config.yaml"
 
 # PPO Training Configuration (Simplified)
 ppo:
@@ -54,24 +40,6 @@ ppo:
   # Output directory
   output_dir: "./ppo_training_output"
 
-# Reward System Configuration (Simplified)
-reward_system:
-  # Simple reward weights
-  completion_weight: 1.0
-  naturalness_weight: 0.2
-  length_weight: 0.1
-
-  # Length preferences
-  min_conversation_length: 2
-  max_conversation_length: 12
-  optimal_length_range: [3, 11]
-
-# Logging Configuration (Minimal)
-logging:
-  level: "INFO"
-  save_conversations: false  # Disabled for simplicity
-  save_verification_reports: false  # Disabled for simplicity
-
 # Evaluation Configuration (Minimal)
 evaluation:
   num_eval_conversations: 3
@@ -88,13 +56,12 @@ hardware:
 # GRPO Training Configuration (using TRL)
 grpo:
   # Basic training parameters
-  learning_rate: 1e-5  # Lower than PPO for stability
-  batch_size: 4
-  group_size: 4  # Number of samples per group for relative comparison
+  learning_rate: 5e-5  # Slightly higher for LoRA updates
+  batch_size: 1
+  group_size: 4  # Minimum for GRPO advantage computation
 
   # Training scale
-  max_epochs: 5
-  max_conversations_per_epoch: 30
+  episodes: 20  # Total episodes to train
 
   # GRPO specific hyperparameters (TRL GRPOConfig)
   grpo_epochs: 4  # Number of optimization epochs per batch
@@ -105,8 +72,11 @@ grpo:
   # Optimization
   temperature: 0.7  # Temperature for generation
   max_grad_norm: 0.5  # Gradient clipping
-  gradient_accumulation_steps: 1
-  warmup_steps: 100
+  gradient_accumulation_steps: 4
+  warmup_steps: 0
+  max_steps: 1
+  max_prompt_length: 128
+  max_completion_length: 128
 
   # Experience replay
   use_buffer: false  # TRL GRPO handles batching internally
@@ -120,6 +90,47 @@ grpo:
 
   # Output directory
   output_dir: "./grpo_training_output"
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  lora_target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+# Objective Generator Configuration
+objective_generator:
+  seed: 42
+  complexity:
+    min: 0
+    max: 2
+  weights:
+    trip_type:
+      one_way: 0.6
+      round_trip: 0.4
+    cabin:
+      economy: 0.65
+      business: 0.25
+      first: 0.1
+    direct:
+      prefer: 0.6
+      allow: 0.4
+    passengers:
+      "1": 0.6
+      "2": 0.25
+      "3": 0.1
+      "4": 0.05
+    extras:
+      budget: 0.4
+      airline: 0.2
+      time_of_day: 0.2
+      seat: 0.1
+      bags: 0.1
+      flexibility: 0.2
 
 # Algorithm Selection
 algorithm: "grpo"  # Options: "ppo", "grpo"

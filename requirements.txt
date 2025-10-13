@@ -22,13 +22,11 @@ rich>=13.0.0
 torch>=2.0.0
 numpy>=1.24.0
 
-# Unsloth for efficient LLM training
-unsloth @ git+https://github.com/unslothai/unsloth.git
-
-# Unsloth dependencies (still uses these but optimized)
-transformers>=4.30.0
-trl>=0.7.0
-peft>=0.17.0
+# Hugging Face stack
+transformers>=4.44.0
+trl>=0.23.0
+peft>=0.10.0
+bitsandbytes>=0.43.1
 
 # Progress tracking
 tqdm>=4.65.0
