@@ -12,6 +12,7 @@ sys.path.append(str(Path(__file__).parent.parent / "agents"))
 from agents.chat.module import FlightBookingChatAgent
 from agents.verifier.module import BookingVerifierAgent
 from agents.coder.module import SQLCoderAgent
+from agents.judge.module import PolicyJudgeAgent
 
 
 @dataclass
@@ -53,11 +54,16 @@ class BookingConversationEnvironment:
         self.coder_config = config.get('coder_config', {
             'config_path': 'agents/coder/config.yaml'
         })
+        self.judge_config = config.get('judge', {
+            'config_path': 'agents/judge/config.yaml',
+            'policy_set_path': 'policies/booking_policies.yaml',
+        })
 
         self.logger = logging.getLogger(__name__)
         self.booking_agent = None
         self.verifier_agent = None
         self.coder_agent = None
+        self.judge_agent: Optional[PolicyJudgeAgent] = None
         self.current_state = None
         self.conversation_count = 0
         self.total_rewards = []
@@ -79,6 +85,8 @@ class BookingConversationEnvironment:
         # Initialize coder agent
         coder_config_path = self.coder_config['config_path']
         self.coder_agent = SQLCoderAgent(coder_config_path)
+        judge_config_path = self.judge_config.get('config_path')
+        self.judge_agent = PolicyJudgeAgent(judge_config_path)
         self.is_initialized = True
 
     def reset(self, booking_objective: Optional[str] = None) -> ConversationState:
@@ -162,70 +170,6 @@ class BookingConversationEnvironment:
             done=done,
             info=info
         )
-
-    def compute_hallucination_reward(self) -> float:
-        """
-        Compute reward for the complete trajectory/conversation
-
-        This checks if the final booking exists in the database:
-        - Reward = 1 if booking doesn't exist (new booking)
-        - Reward = 0 if booking already exists or no booking was made
-
-        Returns:
-            Reward value as float
-        """
-        # Check if conversation is actually complete
-        if not self.current_state or not self.current_state.is_terminated:
-            self.logger.warning("compute_trajectory_reward called but trajectory not complete")
-            return 0.0
-        # Get reward from verifier agent using final booking only
-        if self.verifier_agent:
-            return self._get_verifier_reward()
-        # If no verifier, return a default reward
-        return 0
-
-    def compute_process_reward(
-        self,
-        state: ConversationState,
-        action: str,
-        next_state: ConversationState
-    ) -> float:
-        """
-        Compute process reward for a single transition.
-
-        Currently returns a small shaping bonus to encourage longer dialogs.
-        """
-        return 0.01
-
-    def compute_terminal_reward(self) -> float:
-        """Expose terminal reward computation for training pipelines."""
-        return self.compute_hallucination_reward()
-
-    def compute_shaped_rewards(self, terminal_reward: float, num_steps: int, gamma: float = 0.99) -> List[float]:
-        """
-        Compute shaped rewards with proper credit assignment.
-
-        Uses exponential decay to assign credit to earlier actions,
-        ensuring that actions closer to success receive more credit.
-
-        Args:
-            terminal_reward: The final reward at episode completion
-            num_steps: Number of steps in the episode
-            gamma: Discount factor (default 0.99)
-
-        Returns:
-            List of shaped rewards for each step
-        """
-        shaped_rewards = []
-
-        for i in range(num_steps):
-            # Calculate discounted reward for each step
-            # Steps closer to success get more credit
-            steps_from_end = num_steps - 1 - i
-            discounted_reward = terminal_reward * (gamma ** steps_from_end)
-            shaped_rewards.append(discounted_reward)
-
-        return shaped_rewards
 
     def _format_state(self, conversation_state: ConversationState) -> str:
         """
@@ -311,33 +255,6 @@ class BookingConversationEnvironment:
         max_length_reached = self.current_state.turn_count >= self.max_conversation_length
 
         return user_wants_to_quit or thank_you_closing or booking_complete or max_length_reached
-
-
-    def _get_verifier_reward(self) -> float:
-        """Get reward from verifier agent - checks if final booking exists in database"""
-
-        # If no booking summary was generated, no reward
-        if not self.final_booking_summary:
-            self.logger.info("No booking summary generated - no reward")
-            return 0
-        # Use the new verification method that only checks final booking
-        verification_report = self.verifier_agent.verify_final_booking_only(
-            self.final_booking_summary,
-            self.booking_agent.mcp_client,
-            self.coder_agent
-        )
-        # Return the reward directly from the verification report
-        reward = verification_report.get('reward', 0)
-        # Log the verification result
-        if verification_report.get('verification_complete'):
-            if verification_report.get('booking_exists'):
-                self.logger.info(f"Booking exists in database - reward: {reward}")
-            else:
-                self.logger.info(f"New booking (not in database) - reward: {reward}")
-        else:
-            self.logger.warning(f"Verification failed: {verification_report.get('error', 'Unknown error')}")
-
-        return reward
 
 
     def _generate_booking_objective(self) -> str:

@@ -1,45 +1,22 @@
-import os
-import sys
 import argparse
+import copy
 import logging
 import json
+import os
+import sys
 from pathlib import Path
+from rich.panel import Panel
+from dotenv import load_dotenv
+from rich.console import Console
+from dataclasses import asdict
 from typing import Dict, Any, List, Optional
-
-from dotenv import load_dotenv   
-from rich.console import Console   
-from rich.panel import Panel   
-from rich.progress import (   
+from rich.progress import (
     Progress,
     SpinnerColumn,
     TextColumn,
     BarColumn,
     TimeRemainingColumn,
 )
-from rich.logging import RichHandler   
-
-# Ensure a writable HF cache BEFORE importing modules that touch HF Hub
-def _ensure_writable_hf_cache() -> None:
-    try:
-        user_cache = Path.home() / "hf_cache"
-        hub = user_cache / "hub"
-        datasets = user_cache / "datasets"
-        for p in (hub, datasets):
-            p.mkdir(parents=True, exist_ok=True)
-
-        os.environ["HF_HOME"] = str(user_cache)
-        os.environ["HUGGINGFACE_HUB_CACHE"] = str(hub)
-        os.environ["TRANSFORMERS_CACHE"] = str(hub)
-        os.environ["HF_DATASETS_CACHE"] = str(datasets)
-    except Exception:
-        # Best effort; do not block startup if this fails
-        pass
-
-_ensure_writable_hf_cache()
-
-project_root = Path(__file__).resolve().parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
 
 from training.setup import (
     TrainingSetup,
@@ -49,14 +26,18 @@ from training.setup import (
     load_config,
 )
 from training.utils import BookingObjectiveGenerator, ConsoleReporter
+from training.oracle import Oracle
+
+
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 
 def run_training(config: Dict[str, Any]) -> None:
-    console = Console()
+    console = Console(record=True)
 
-    algorithm_name = config.get("algorithm", "ppo").lower()
-    if algorithm_name not in ("ppo", "grpo"):
-        raise ValueError(f"Unsupported algorithm: {algorithm_name}")
+    algorithm_name = config.get("algorithm", "grpo").lower()
 
     setup = TrainingSetup(config, console)
     setup.configure_hf_caches()
@@ -64,11 +45,37 @@ def run_training(config: Dict[str, Any]) -> None:
     reporter.show_config(algorithm_name, config)
     algo_config = config[algorithm_name]
     output_dir = setup.prepare_output()
+    reporter.configure_logging(output_dir)
+    logging.info("Training output directory: %s", output_dir)
 
     console.print(Panel("[bold cyan]Initializing Training Components[/bold cyan]", expand=False))
     environment = setup.environment()
     policy = setup.policy()
     trainer = setup.trainer()
+    policy_cfg = config.get("environment", {}).get("judge", {})
+    policy_set_path = policy_cfg.get("policy_set_path")
+    policy_path = Path(policy_set_path)
+    with open(policy_path, "r", encoding="utf-8") as policy_file:
+        policy_bundle = yaml.safe_load(policy_file) or {}
+        logging.info("Loaded policy bundle from %s", policy_path)
+
+    # process_reward_cfg = copy.deepcopy(
+    #     config.get("environment", {}).get("process_reward", {})
+    # )
+    # armo_cfg = process_reward_cfg.get("armo") if process_reward_cfg else None
+    # if armo_cfg and armo_cfg.get("model_path"):
+    #     model_path = Path(armo_cfg["model_path"])
+    #     if not model_path.is_absolute():
+    #         armo_cfg["model_path"] = str(project_root / model_path)
+
+    reward = Oracle(
+        booking_agent=environment.booking_agent,
+        verifier_agent=environment.verifier_agent,
+        coder_agent=environment.coder_agent,
+        judge_agent=getattr(environment, "judge_agent", None),
+        policy_bundle=policy_bundle,
+        process_reward_config=process_reward_cfg,
+    )
 
     objective_generator_cfg = config.get("objective_generator", {})
     env_cfg = config.get("environment", {})
@@ -123,6 +130,7 @@ def run_training(config: Dict[str, Any]) -> None:
             states: List[str] = []
             actions: List[str] = []
             conversation_history: List[Dict[str, Any]] = []
+            process_rewards: List[float] = []
             done = False
             while not done:
                 states.append(state)
@@ -136,6 +144,14 @@ def run_training(config: Dict[str, Any]) -> None:
                     }
                 )
                 step_result = environment.step(action)
+                process_reward_value = reward.compute_process(
+                    previous_state,
+                    action,
+                    step_result.state,
+                    history_before=history_before_action,
+                    history_after=history_after_action,
+                )
+                process_rewards.append(float(process_reward_value))
 
                 assistant_reply = environment.booking_agent.conversation_history[-1].get("content")
                 reporter.show_turn(episode_idx, len(conversation_history), action, assistant_reply)
@@ -145,24 +161,41 @@ def run_training(config: Dict[str, Any]) -> None:
                 if not done:
                     state = environment._format_state(step_result.state)
             num_turns = len(states)
-            terminal_reward = environment.compute_hallucination_reward()
-            shaped_rewards = environment.compute_shaped_rewards(
+            terminal_reward = reward.compute_terminal(
+                state=environment.current_state,
+                final_booking_summary=environment.final_booking_summary,
+            )
+            shaped_rewards = reward.compute_shaped(
                 terminal_reward,
                 num_turns,
                 gamma=gamma,
             )
+            combined_rewards: List[float] = []
+            for idx in range(num_turns):
+                shaped_val = shaped_rewards[idx] if idx < len(shaped_rewards) else 0.0
+                process_val = process_rewards[idx] if idx < len(process_rewards) else 0.0
+                combined_rewards.append(float(shaped_val + process_val))
+            policy_result = reward.latest_policy_result
+            reward_components = dict(reward.latest_reward_components or {})
+
             trajectory = Trajectory(
                 episode_index=episode_idx,
                 states=states,
                 actions=actions,
-                rewards=shaped_rewards,
+                rewards=combined_rewards,
                 terminal_reward=terminal_reward,
                 episode_reward=terminal_reward,
                 num_turns=num_turns,
                 conversation_history=conversation_history,
+                process_rewards=process_rewards,
                 booking_summary=getattr(environment, "final_booking_summary", None),
                 objective=episode_objective or getattr(state_obj, "booking_objective", None),
+                reward_components=reward_components,
             )
+            trajectory_path = output_dir / "trajectory_logs" / f"episode_{episode_idx:04d}.json"
+            with open(trajectory_path, "w", encoding="utf-8") as trajectory_file:
+                json.dump(trajectory.to_dict(), trajectory_file, indent=2)
+
             train_metrics = trainer.train_step(
                 trajectories=[trajectory.to_dict()],
                 epoch=episode_idx - 1,
@@ -181,6 +214,9 @@ def run_training(config: Dict[str, Any]) -> None:
 
     reporter.show_final(history, output_dir)
     console.print("[cyan]Review the logs to understand conversation patterns and success cases.[/cyan]")
+    console.save_text(output_dir / "console.txt")
+    console.export_html(output_dir / "console.html")
+    logging.info("Saved console transcript to %s and %s", output_dir / "console.txt", output_dir / "console.html")
 
 
 def main() -> None:

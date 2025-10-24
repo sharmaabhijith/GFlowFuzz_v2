@@ -4,74 +4,17 @@ import logging
 import random
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 from rich import box
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
-
+from rich.logging import RichHandler
 
 class BookingObjectiveGenerator:
-    """Generate high-level booking objectives with database-backed locations."""
-
-    _DEFAULT_ORIGINS = [
-        "New York",
-        "Los Angeles",
-        "Chicago",
-        "Miami",
-        "Boston",
-        "Seattle",
-        "San Francisco",
-        "Denver",
-        "Dallas",
-        "Atlanta",
-    ]
-
-    _DEFAULT_DESTINATIONS = [
-        "London",
-        "Paris",
-        "Tokyo",
-        "Sydney",
-        "Dubai",
-        "Singapore",
-        "Hong Kong",
-        "Rome",
-        "Barcelona",
-        "Amsterdam",
-    ]
-
-    _DEFAULT_AIRLINES = [
-        "Delta",
-        "United",
-        "American Airlines",
-        "British Airways",
-        "Lufthansa",
-        "Air France",
-        "Emirates",
-        "Qantas",
-        "Singapore Airlines",
-        "Air Canada",
-    ]
-
-    _DEFAULT_CABINS = ["economy", "business", "first"]
-    _DEFAULT_TIME_OF_DAY = ["morning", "afternoon", "evening", "red-eye"]
-    _DEFAULT_SEAT_TYPES = ["window seat", "aisle seat"]
-    _DEFAULT_MONTHS = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-    ]
+    """Generate booking objectives using cities drawn from the flights database."""
 
     def __init__(
         self,
@@ -88,12 +31,10 @@ class BookingObjectiveGenerator:
 
         self._db_path = self._resolve_db_path(db_path)
         self._origins, self._destinations = self._load_locations()
-        self._airlines = self._load_airlines()
-        self._cabin_classes = self._load_cabin_classes()
 
-    def _resolve_db_path(self, db_path: Optional[Path | str]) -> Optional[Path]:
+    def _resolve_db_path(self, db_path: Optional[Path | str]) -> Path:
         if not db_path:
-            return None
+            raise ValueError("BookingObjectiveGenerator requires a database path.")
 
         path = Path(db_path)
         if not path.is_absolute():
@@ -101,35 +42,25 @@ class BookingObjectiveGenerator:
             path = project_root / path
 
         if not path.exists():
-            self.logger.warning(f"Objective generator could not find database at {path}")
-            return None
+            raise FileNotFoundError(f"Flights database not found at {path}")
         return path
 
-    def _connect(self) -> Optional[sqlite3.Connection]:
-        if not self._db_path:
-            return None
+    def _connect(self) -> sqlite3.Connection:
         try:
             return sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True)
         except sqlite3.Error as exc:
-            self.logger.warning(f"Failed to open flights database: {exc}")
-            return None
+            raise RuntimeError(f"Failed to open flights database: {exc}") from exc
 
     def _load_locations(self) -> tuple[List[str], List[str]]:
-        origins: List[str] = []
-        destinations: List[str] = []
-
-        conn = self._connect()
-        if conn:
-            try:
-                origins = self._fetch_city_names(conn, "departure_airport")
-                destinations = self._fetch_city_names(conn, "arrival_airport")
-            finally:
-                conn.close()
+        with self._connect() as conn:
+            origins = self._fetch_city_names(conn, "departure_airport")
+            destinations = self._fetch_city_names(conn, "arrival_airport")
 
         if not origins:
-            origins = self._DEFAULT_ORIGINS.copy()
+            raise RuntimeError(f"No departure cities available in database: {self._db_path}")
         if not destinations:
-            destinations = self._DEFAULT_DESTINATIONS.copy()
+            raise RuntimeError(f"No arrival cities available in database: {self._db_path}")
+
         return origins, destinations
 
     def _fetch_city_names(self, conn: sqlite3.Connection, airport_column: str) -> List[str]:
@@ -142,58 +73,9 @@ class BookingObjectiveGenerator:
         """
         try:
             cursor = conn.execute(query)
-            names = [row[0] for row in cursor.fetchall() if row[0]]
-            return names
+            return [row[0] for row in cursor.fetchall() if row[0]]
         except sqlite3.Error as exc:
-            self.logger.warning(f"Failed to load city names from database: {exc}")
-            return []
-
-    def _load_airlines(self) -> List[str]:
-        conn = self._connect()
-        airlines: List[str] = []
-        if conn:
-            try:
-                cursor = conn.execute(
-                    """
-                    SELECT DISTINCT airline_name
-                    FROM flights
-                    WHERE airline_name IS NOT NULL AND airline_name != ''
-                    ORDER BY airline_name COLLATE NOCASE
-                    """
-                )
-                airlines = [row[0] for row in cursor.fetchall() if row[0]]
-            except sqlite3.Error as exc:
-                self.logger.warning(f"Failed to load airlines from database: {exc}")
-            finally:
-                conn.close()
-
-        if not airlines:
-            airlines = self._DEFAULT_AIRLINES.copy()
-        return airlines
-
-    def _load_cabin_classes(self) -> List[str]:
-        conn = self._connect()
-        cabins: List[str] = []
-
-        if conn:
-            try:
-                cursor = conn.execute(
-                    """
-                    SELECT DISTINCT cabin_class
-                    FROM flights
-                    WHERE cabin_class IS NOT NULL AND cabin_class != ''
-                    ORDER BY cabin_class COLLATE NOCASE
-                    """
-                )
-                cabins = [row[0].lower() for row in cursor.fetchall() if row[0]]
-            except sqlite3.Error as exc:
-                self.logger.warning(f"Failed to load cabin classes: {exc}")
-            finally:
-                conn.close()
-
-        if not cabins:
-            cabins = self._DEFAULT_CABINS.copy()
-        return cabins
+            raise RuntimeError(f"Failed to load city names from database: {exc}") from exc
 
     def reset_seed(self, seed: Optional[int]) -> None:
         """Reset the RNG seed (useful for reproducible experiments)."""
@@ -202,174 +84,16 @@ class BookingObjectiveGenerator:
             return
         self._rng.seed(seed)
 
-    def _weighted_choice(
-        self,
-        weight_map: Optional[Dict[str, Any]],
-        default_value: Optional[str],
-        allowed: Optional[Sequence[str]] = None,
-    ) -> Optional[str]:
-        if not weight_map:
-            return default_value
-
-        candidates: List[tuple[str, float]] = []
-        allowed_set = {item.lower(): item for item in allowed} if allowed else None
-        for key, value in weight_map.items():
-            try:
-                weight = float(value)
-            except (TypeError, ValueError):
-                continue
-            if weight <= 0:
-                continue
-            key_str = str(key)
-            if allowed_set is not None:
-                lookup = key_str.lower()
-                if lookup not in allowed_set:
-                    continue
-                key_str = allowed_set[lookup]
-            candidates.append((key_str, weight))
-
-        if not candidates:
-            return default_value
-
-        total = sum(weight for _, weight in candidates)
-        pick = self._rng.uniform(0, total)
-        cumulative = 0.0
-        for key, weight in candidates:
-            cumulative += weight
-            if pick <= cumulative:
-                return key
-        return candidates[-1][0]
-
-    def _weighted_sample_without_replacement(
-        self,
-        weight_map: Optional[Dict[str, Any]],
-        count: int,
-        allowed: Optional[Sequence[str]] = None,
-    ) -> List[str]:
-        if not weight_map or count <= 0:
-            return []
-
-        selections: List[str] = []
-        remaining: Dict[str, Any] = dict(weight_map)
-
-        for _ in range(count):
-            choice = self._weighted_choice(remaining, None, allowed=allowed)
-            if not choice:
-                break
-            selections.append(choice)
-            remaining.pop(choice, None)
-        return selections
-
     def generate(self) -> str:
-        """Generate a booking objective string."""
-        weights_cfg = self.config.get("weights") or {}
-        complexity_cfg = self.config.get("complexity") or {}
-
-        cabin_choice = self._weighted_choice(
-            weights_cfg.get("cabin"),
-            default_value=self._DEFAULT_CABINS[0],
-            allowed=self._cabin_classes,
-        )
-        cabin = (cabin_choice or self._DEFAULT_CABINS[0]).lower()
-
-        trip_type = (
-            self._weighted_choice(weights_cfg.get("trip_type"), "one_way")
-            or "one_way"
-        ).lower()
-        direct_pref = (
-            self._weighted_choice(weights_cfg.get("direct"), "prefer")
-            or "prefer"
-        ).lower()
-        passengers_raw = self._weighted_choice(weights_cfg.get("passengers"), "1") or "1"
-        try:
-            passengers = max(1, int(float(passengers_raw)))
-        except (TypeError, ValueError):
-            passengers = 1
-
+        """Generate a booking objective containing only origin and destination."""
         origin = self._rng.choice(self._origins)
         destination = self._choose_destination(origin)
-
-        month = self._rng.choice(self._DEFAULT_MONTHS)
-        travel_window = self._rng.choice(
-            [
-                f"{month} 2026",
-                f"early {month} 2026",
-                f"mid {month} 2026",
-                f"late {month} 2026",
-            ]
-        )
-
-        complexity_min = max(0, int(complexity_cfg.get("min", 0)))
-        complexity_max = max(complexity_min, int(complexity_cfg.get("max", 2)))
-        if complexity_max <= 0:
-            num_extras = 0
-        else:
-            sampled = self._rng.randint(complexity_min, complexity_max)
-            num_extras = min(1, sampled)
-
-        extra_tags = self._weighted_sample_without_replacement(
-            weights_cfg.get("extras"), num_extras
-        )
-        extra_clauses: List[str] = []
-
-        for tag in extra_tags:
-            tag_lower = tag.lower()
-            if tag_lower == "budget":
-                budget = self._rng.choice(list(range(400, 1801, 50)))
-                extra_clauses.append(f"keep the total under ${budget}")
-            elif tag_lower == "airline":
-                airline = self._rng.choice(self._airlines)
-                extra_clauses.append(f"prefer to fly with {airline}")
-            elif tag_lower == "time_of_day":
-                time_pref = self._rng.choice(self._DEFAULT_TIME_OF_DAY)
-                if time_pref == "red-eye":
-                    extra_clauses.append("open to a red-eye departure")
-                else:
-                    extra_clauses.append(f"prefer a {time_pref} departure")
-            elif tag_lower == "seat":
-                seat_pref = self._rng.choice(self._DEFAULT_SEAT_TYPES)
-                extra_clauses.append(f"would like a {seat_pref}")
-            elif tag_lower == "bags":
-                bag_count = self._rng.choice([1, 2, 3])
-                label = "bag" if bag_count == 1 else "bags"
-                extra_clauses.append(f"traveling with {bag_count} checked {label}")
-            elif tag_lower == "flexibility":
-                extra_clauses.append("dates are flexible by a few days")
-
-        detail_clauses: List[str] = []
-        if direct_pref == "prefer":
-            detail_clauses.append("prefer direct flights")
-        elif direct_pref in {"allow", "layover_ok", "layover"}:
-            detail_clauses.append("okay with a layover if needed")
-
-        passenger_clause = f"for {passengers} passengers" if passengers > 1 else ""
-        trip_descriptor = "round-trip" if trip_type == "round_trip" else "one-way"
-
-        base_parts = [
-            f"I need a {trip_descriptor} {cabin} flight",
-            f"from {origin} to {destination}",
-            f"in {travel_window}",
-            passenger_clause,
-        ]
-        base_sentence = " ".join(part for part in base_parts if part).strip()
-
-        extras_sentence = ""
-        extra_sentence_parts = detail_clauses + extra_clauses
-        if extra_sentence_parts:
-            extras_sentence = " Also, " + "; ".join(extra_sentence_parts) + "."
-
-        if not base_sentence.endswith("."):
-            base_sentence += "."
-        return base_sentence + extras_sentence
+        return f"I want to book a flight from {origin} to {destination}."
 
     def _choose_destination(self, origin: str) -> str:
         candidates = [city for city in self._destinations if city != origin]
         if not candidates:
-            fallback = [city for city in self._DEFAULT_DESTINATIONS if city != origin]
-            if fallback:
-                candidates = fallback
-            else:
-                return origin
+            raise RuntimeError("No suitable destination city found different from the origin.")
         return self._rng.choice(candidates)
 
 
@@ -379,6 +103,37 @@ class ConsoleReporter:
 
     def __init__(self, console: Optional[Console] = None) -> None:
         self.console = console or Console()
+
+    def configure_logging(self, output_dir: Path) -> None:
+        """Route logs to both the Rich console and a persistent file."""
+        log_path = Path(output_dir) / "training.log"
+        root_logger = logging.getLogger()
+
+        for handler in list(root_logger.handlers):
+            root_logger.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
+
+        rich_handler = RichHandler(
+            console=self.console,
+            rich_tracebacks=True,
+            show_time=False,
+            show_path=False,
+            markup=True,
+        )
+        file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        file_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s"))
+        rich_handler.setFormatter(logging.Formatter("%(message)s"))
+
+        root_logger.setLevel(logging.INFO)
+        root_logger.addHandler(rich_handler)
+        root_logger.addHandler(file_handler)
+
+        logging.getLogger("transformers").setLevel(logging.WARNING)
+        logging.getLogger("datasets").setLevel(logging.WARNING)
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
 
     def show_config(self, algorithm_name: str, config: Dict[str, Any]) -> None:
         algo_config = config[algorithm_name]
