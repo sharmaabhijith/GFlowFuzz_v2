@@ -118,7 +118,7 @@ class PPOAlgorithm:
                 else:
                     # Fallback for backward compatibility
                     if i == num_turns - 1:  # Terminal state
-                        rewards.append(traj.get("episode_reward", 0.0))
+                        rewards.append(traj.get("terminal_reward", 0.0))
                     else:
                         rewards.append(0.0)
 

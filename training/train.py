@@ -1,8 +1,7 @@
 import argparse
-import copy
+import yaml
 import logging
 import json
-import os
 import sys
 from pathlib import Path
 from rich.panel import Panel
@@ -58,23 +57,13 @@ def run_training(config: Dict[str, Any]) -> None:
     with open(policy_path, "r", encoding="utf-8") as policy_file:
         policy_bundle = yaml.safe_load(policy_file) or {}
         logging.info("Loaded policy bundle from %s", policy_path)
-
-    # process_reward_cfg = copy.deepcopy(
-    #     config.get("environment", {}).get("process_reward", {})
-    # )
-    # armo_cfg = process_reward_cfg.get("armo") if process_reward_cfg else None
-    # if armo_cfg and armo_cfg.get("model_path"):
-    #     model_path = Path(armo_cfg["model_path"])
-    #     if not model_path.is_absolute():
-    #         armo_cfg["model_path"] = str(project_root / model_path)
-
+    
     reward = Oracle(
         booking_agent=environment.booking_agent,
         verifier_agent=environment.verifier_agent,
         coder_agent=environment.coder_agent,
         judge_agent=getattr(environment, "judge_agent", None),
         policy_bundle=policy_bundle,
-        process_reward_config=process_reward_cfg,
     )
 
     objective_generator_cfg = config.get("objective_generator", {})
@@ -112,25 +101,19 @@ def run_training(config: Dict[str, Any]) -> None:
                     expand=False,
                 )
             )
-            episode_objective = (
-                objective_generator.generate() if objective_generator else None
-            )
-            if episode_objective:
-                console.print(
-                    Panel(
-                        f"[bold cyan]Objective[/bold cyan]\n{episode_objective}",
-                        title="[yellow]Episode Goal[/yellow]",
-                        expand=False,
-                    )
+            episode_objective = objective_generator.generate() 
+            console.print(
+                Panel(
+                    f"[bold cyan]Objective[/bold cyan]\n{episode_objective}",
+                    title="[yellow]Episode Goal[/yellow]",
+                    expand=False,
                 )
+            )
             state_obj = environment.reset(booking_objective=episode_objective)
-            if episode_objective and getattr(state_obj, "booking_objective", None) != episode_objective:
-                state_obj.booking_objective = episode_objective
             state = environment._format_state(state_obj)
             states: List[str] = []
             actions: List[str] = []
             conversation_history: List[Dict[str, Any]] = []
-            process_rewards: List[float] = []
             done = False
             while not done:
                 states.append(state)
@@ -144,14 +127,6 @@ def run_training(config: Dict[str, Any]) -> None:
                     }
                 )
                 step_result = environment.step(action)
-                process_reward_value = reward.compute_process(
-                    previous_state,
-                    action,
-                    step_result.state,
-                    history_before=history_before_action,
-                    history_after=history_after_action,
-                )
-                process_rewards.append(float(process_reward_value))
 
                 assistant_reply = environment.booking_agent.conversation_history[-1].get("content")
                 reporter.show_turn(episode_idx, len(conversation_history), action, assistant_reply)
@@ -161,36 +136,23 @@ def run_training(config: Dict[str, Any]) -> None:
                 if not done:
                     state = environment._format_state(step_result.state)
             num_turns = len(states)
-            terminal_reward = reward.compute_terminal(
-                state=environment.current_state,
-                final_booking_summary=environment.final_booking_summary,
-            )
+            terminal_reward = reward.compute_terminal(environment.final_booking_summary)
             shaped_rewards = reward.compute_shaped(
                 terminal_reward,
                 num_turns,
                 gamma=gamma,
             )
-            combined_rewards: List[float] = []
-            for idx in range(num_turns):
-                shaped_val = shaped_rewards[idx] if idx < len(shaped_rewards) else 0.0
-                process_val = process_rewards[idx] if idx < len(process_rewards) else 0.0
-                combined_rewards.append(float(shaped_val + process_val))
-            policy_result = reward.latest_policy_result
-            reward_components = dict(reward.latest_reward_components or {})
 
             trajectory = Trajectory(
                 episode_index=episode_idx,
                 states=states,
                 actions=actions,
-                rewards=combined_rewards,
+                shaped_rewards=shaped_rewards,
                 terminal_reward=terminal_reward,
-                episode_reward=terminal_reward,
                 num_turns=num_turns,
                 conversation_history=conversation_history,
-                process_rewards=process_rewards,
                 booking_summary=getattr(environment, "final_booking_summary", None),
                 objective=episode_objective or getattr(state_obj, "booking_objective", None),
-                reward_components=reward_components,
             )
             trajectory_path = output_dir / "trajectory_logs" / f"episode_{episode_idx:04d}.json"
             with open(trajectory_path, "w", encoding="utf-8") as trajectory_file:

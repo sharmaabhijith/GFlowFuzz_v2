@@ -271,7 +271,7 @@ class GRPOAlgorithm:
                 else:
                     # Fallback to episode reward for last step
                     if i == num_turns - 1:
-                        rewards.append(traj.get("terminal_reward", traj.get("episode_reward", 0.0)))
+                        rewards.append(traj.get("terminal_reward", 0.0))
                     else:
                         rewards.append(traj.get("process_rewards", [0.0])[i] if "process_rewards" in traj else 0.0)
 

@@ -36,17 +36,14 @@ class Trajectory:
     episode_index: int
     states: List[str]
     actions: List[str]
-    rewards: List[float]  # Shaped rewards per step
+    shaped_rewards: List[float]  # Shaped rewards per step
     terminal_reward: float
-    episode_reward: float
     num_turns: int
     conversation_history: List[Dict[str, Any]]
-    process_rewards: Optional[List[float]] = None
     booking_summary: Optional[Any] = None
     objective: Optional[str] = None
     verification_report: Optional[Dict[str, Any]] = None
     judge_report: Optional[Dict[str, Any]] = None
-    reward_components: Optional[Dict[str, float]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to plain dict for trainer interfaces and serialization."""
@@ -54,17 +51,14 @@ class Trajectory:
             "episode_index": self.episode_index,
             "states": self.states,
             "actions": self.actions,
-            "rewards": self.rewards,
-            "episode_reward": self.episode_reward,
+            "shaped_rewards": self.shaped_rewards,
             "terminal_reward": self.terminal_reward,
             "num_turns": self.num_turns,
             "conversation_history": self.conversation_history,
-            "process_rewards": self.process_rewards,
             "booking_summary": self.booking_summary,
             "objective": self.objective,
             "verification_report": self.verification_report,
             "judge_report": self.judge_report,
-            "reward_components": self.reward_components,
         }
 
 
@@ -84,8 +78,6 @@ class EpisodeMetrics:
     value_loss: float = 0.0
     success: bool = False
     raw_metrics: Dict[str, Any] = field(default_factory=dict)
-    process_reward_mean: float = 0.0
-    process_reward_sum: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -101,15 +93,12 @@ class EpisodeMetrics:
             "value_loss": self.value_loss,
             "success": self.success,
             "raw_metrics": self.raw_metrics,
-            "process_reward_mean": self.process_reward_mean,
-            "process_reward_sum": self.process_reward_sum,
         }
 
     def for_display(self) -> Dict[str, Any]:
         return {
             "avg_reward": self.shaped_reward_mean,
             "avg_terminal_reward": self.terminal_reward,
-            "avg_process_reward": self.process_reward_mean,
             "success_rate": 1.0 if self.success else 0.0,
             "loss": self.algo_loss,
             "kl_divergence": self.kl_divergence,
@@ -129,9 +118,6 @@ class EpisodeMetrics:
         shaped_sum = float(sum(rewards))
         shaped_mean = shaped_sum / len(rewards) if rewards else 0.0
         algo_loss = train_metrics.get("grpo_loss", train_metrics.get("loss", 0.0))
-        process_rewards = trajectory.process_rewards or []
-        process_sum = float(sum(process_rewards)) if process_rewards else 0.0
-        process_mean = process_sum / len(process_rewards) if process_rewards else 0.0
         return cls(
             episode_index=episode_index,
             total_steps=trajectory.num_turns,
@@ -145,8 +131,6 @@ class EpisodeMetrics:
             value_loss=train_metrics.get("value_loss", 0.0),
             success=trajectory.terminal_reward > 0.5,
             raw_metrics=train_metrics,
-            process_reward_mean=process_mean,
-            process_reward_sum=process_sum,
         )
 
 class TrainingSetup:

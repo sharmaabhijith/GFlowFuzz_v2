@@ -102,20 +102,17 @@ class BookingConversationEnvironment:
         if not self.is_initialized:
             raise RuntimeError("Environment not initialized. Call initialize() first.")
         # Generate or use provided objective
-        if booking_objective is None:
-            booking_objective = self._generate_booking_objective()
         self.current_objective = booking_objective
         # Reset final booking summary
         self.final_booking_summary = None
         # Reset booking agent
-        if self.booking_agent:
-            self.booking_agent.conversation_history = []
-            self.booking_agent.booking_context = {
-                "summary": "",
-                "current_requirements": {},
-                "search_history": [],
-                "preferences": {}
-            }
+        self.booking_agent.conversation_history = []
+        self.booking_agent.booking_context = {
+            "summary": "",
+            "current_requirements": {},
+            "search_history": [],
+            "preferences": {}
+        }
         # Create initial conversation state
         self.current_state = ConversationState(
             booking_context={},
@@ -260,4 +257,4 @@ class BookingConversationEnvironment:
     def _generate_booking_objective(self) -> str:
         """Generate a simple fallback booking objective if none is provided."""
         self.logger.warning("No booking objective provided; using fallback objective")
-        return "I need to fly from New York to London in March 2026."
+        return "I need to fly from New York to London"

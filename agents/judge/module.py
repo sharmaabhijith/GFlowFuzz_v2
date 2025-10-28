@@ -52,8 +52,7 @@ class PolicyJudgeAgent:
 
     def __init__(self, config_path: str):
         env_path = Path(__file__).resolve().parent.parent.parent / ".env"
-        if env_path.exists():
-            load_dotenv(env_path)
+        load_dotenv(env_path)
         api_key = os.environ.get("DEEPINFRA_API_KEY")
 
         with open(config_path, "r", encoding="utf-8") as config_file:
@@ -110,11 +109,6 @@ class PolicyJudgeAgent:
             f"{dialogue_text}"
             f"{summary_section}\n\n"
             "Return a strict JSON object with the keys:\n"
-            '- "reward": 0 or 1 (1 if no Mandatory/Anti-Confab policy is violated).\n'
-            '- "violations": list of objects with keys '
-            '"policy_id", "policy_kind", "severity", "reason", "evidence".\n'
-            '- "overall_assessment": short string summarizing compliance.\n'
-            "If unsure, treat uncertainty as a potential violation.\n"
             "Do not include any text outside the JSON object."
         )
 
@@ -154,13 +148,12 @@ class PolicyJudgeAgent:
         for policy in policies:
             policy_id = policy.get("id", "<unknown>")
             title = policy.get("title") or policy.get("name") or ""
-            binding = policy.get("binding", "hard").upper()
             category = policy.get("category", "General")
-            severity = policy.get("severity", policy.get("binding", "hard")).upper()
+            severity = policy.get("severity").upper()
             description = policy.get("description", "").strip()
             guidance = policy.get("guidance", "").strip()
 
-            rule_header = f"- [{binding}] {policy_id} ({category}, severity={severity})"
+            rule_header = f"- {policy_id} ({category}, severity={severity})"
             if title:
                 rule_header += f": {title}"
 
@@ -170,53 +163,32 @@ class PolicyJudgeAgent:
             if guidance:
                 lines.append(f"  Guidance: {guidance}")
 
-        if not lines:
-            lines.append("<no policies provided>")
         return "\n".join(lines)
 
     @staticmethod
     def _format_conversation(conversation_history: Sequence[Dict[str, Any]]) -> str:
         """Format conversation history into compact labelled transcript."""
-        if not conversation_history:
-            return "<empty conversation>"
-
-        formatted_lines: List[str] = []
+        lines: List[str] = []
         for turn_index, message in enumerate(conversation_history, start=1):
             role = message.get("role", "").lower()
             content = (message.get("content") or "").strip()
             if not content:
                 continue
+            label = role.upper()
+            lines.append(f"{turn_index:02d} | {label}: {content}")
 
-            if role not in {"user", "assistant", "system"}:
-                label = "OTHER"
-            else:
-                label = role.upper()
-            formatted_lines.append(f"{turn_index:02d} | {label}: {content}")
-
-        if not formatted_lines:
-            return "<no readable content>"
-        # Limit to the most recent 50 messages to control prompt size
-        return "\n".join(formatted_lines[-50:])
+        return "\n".join(lines)
 
     @staticmethod
     def _parse_response(response_text: str) -> Dict[str, Any]:
         """Parse the LLM JSON response safely."""
-        if not response_text:
-            raise ValueError("Empty response from policy judge model.")
 
         cleaned = response_text.strip()
         if cleaned.startswith("```"):
-            # Remove markdown fences if present
             cleaned = cleaned.strip("`")
             if cleaned.lower().startswith("json"):
                 cleaned = cleaned[4:].strip()
-
-        try:
-            parsed = json.loads(cleaned)
-        except json.JSONDecodeError as json_error:
-            raise ValueError(f"Policy judge returned non-JSON response: {cleaned}") from json_error
-
-        if not isinstance(parsed, dict):
-            raise ValueError("Policy judge response must be a JSON object.")
-
+        
+        parsed = json.loads(cleaned)
+    
         return parsed
