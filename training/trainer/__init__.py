@@ -13,10 +13,10 @@ Available Algorithms:
 - [Future] A2C (Advantage Actor-Critic)
 """
 
-from .ppo import PPOAlgorithm
 from .grpo import GRPOAlgorithm
+from .gflownet import GFlowNetAlgorithm
 
 __all__ = [
-    "PPOAlgorithm",
     "GRPOAlgorithm",
+    "GFlowNetAlgorithm",
 ]

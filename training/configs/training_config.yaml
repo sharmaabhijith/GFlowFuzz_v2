@@ -133,9 +133,41 @@ grpo:
     - up_proj
     - down_proj
 
+# GFlowNet Training Configuration
+gflownet:
+  learning_rate: 5e-5
+  log_z_learning_rate: 5e-5
+  weight_decay: 0.0
+  gradient_accumulation_steps: 4
+  max_grad_norm: 1.0
+  max_prompt_length: 256
+  max_completion_length: 192
+  min_reward: 1.0e-4
+  reward_scale: 1.0
+  reward_exponent: 1.0
+  use_terminal_reward: true
+  use_shaped_rewards: true
+  shaped_reward_coef: 0.2
+  entropy_coef: 0.0
+  episodes: 20
+  gamma: 0.99
+  save_freq: 2
+  output_dir: "./gflownet_training_output"
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  lora_target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
 # Objective Generator Configuration
 objective_generator:
   seed: 42
 
 # Algorithm Selection
-algorithm: "grpo"  # Options: "ppo", "grpo"
+algorithm: "grpo"  # Options: "ppo", "grpo", "gflownet"

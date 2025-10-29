@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 from agents.auditor.module import AuditorAgent, AuditorConfig
 from .trainer.ppo import PPOAlgorithm
 from .trainer.grpo import GRPOAlgorithm
+from .trainer.gflownet import GFlowNetAlgorithm
 
 
 def load_config(config_path: str) -> Dict:
@@ -114,9 +115,9 @@ class EpisodeMetrics:
         trajectory: "Trajectory",
         train_metrics: Dict[str, Any],
     ) -> "EpisodeMetrics":
-        rewards = trajectory.rewards or [trajectory.terminal_reward]
-        shaped_sum = float(sum(rewards))
-        shaped_mean = shaped_sum / len(rewards) if rewards else 0.0
+        shaped_rewards = trajectory.shaped_rewards
+        shaped_sum = float(sum(shaped_rewards))
+        shaped_mean = shaped_sum / len(shaped_rewards) if shaped_rewards else 0.0
         algo_loss = train_metrics.get("grpo_loss", train_metrics.get("loss", 0.0))
         return cls(
             episode_index=episode_index,
@@ -141,7 +142,7 @@ class TrainingSetup:
         self.console = console or Console()
         self._environment: Optional[BookingConversationEnvironment] = None
         self._policy: Optional[AuditorAgent] = None
-        self._trainer: Optional[PPOAlgorithm | GRPOAlgorithm] = None
+        self._trainer: Optional[PPOAlgorithm | GRPOAlgorithm | GFlowNetAlgorithm] = None
         self._output_dir: Optional[Path] = None
         self._auditor_config: Optional[Dict[str, Any]] = None
 
@@ -236,11 +237,13 @@ class TrainingSetup:
             self._policy = policy
         return self._policy
 
-    def trainer(self) -> PPOAlgorithm | GRPOAlgorithm:
+    def trainer(self) -> PPOAlgorithm | GRPOAlgorithm | GFlowNetAlgorithm:
         if self._trainer is None:
             algo_name = self.config.get("algorithm", "ppo").lower()
             if algo_name == "grpo":
                 trainer = GRPOAlgorithm(self.config, console=self.console)
+            elif algo_name == "gflownet":
+                trainer = GFlowNetAlgorithm(self.config, console=self.console)
             else:
                 trainer = PPOAlgorithm(self.config, console=self.console)
             trainer.setup_trainer(self.policy())
