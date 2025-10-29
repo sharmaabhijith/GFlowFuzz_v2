@@ -170,4 +170,4 @@ objective_generator:
   seed: 42
 
 # Algorithm Selection
-algorithm: "grpo"  # Options: "ppo", "grpo", "gflownet"
+algorithm: "gflownet"  # Options: "ppo", "grpo", "gflownet"
