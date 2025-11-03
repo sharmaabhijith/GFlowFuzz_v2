@@ -22,7 +22,6 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
 logger = logging.getLogger(__name__)
 
-
 class GRPOAlgorithm:
     """Minimal policy-gradient trainer compatible with the new training loop."""
 
@@ -33,7 +32,7 @@ class GRPOAlgorithm:
         self.model = None
         self.tokenizer = None
         self.optimizer: Optional[AdamW] = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device(self.config.get("grpo", {}).get("device"))
 
         self.grad_accum_steps = 1
         self.max_grad_norm = 1.0
@@ -80,6 +79,7 @@ class GRPOAlgorithm:
         self.console.print("[green]✓[/green] GRPO trainer initialised (lightweight policy gradient)")
         self.console.print(f"  - Learning rate: {learning_rate}")
         self.console.print(f"  - Grad accum steps: {self.grad_accum_steps}")
+        self.console.print(f"  - Device: {self.device}")
         self.console.print(f"  - Max prompt / completion: {self.max_prompt_length} / {self.max_completion_length}")
 
         return self

@@ -9,9 +9,9 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from dataclasses import dataclass
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
-
 
 @dataclass
 class AuditorConfig:
@@ -48,20 +48,31 @@ class AuditorAgent:
         self.tokenizer = None
         self.device = None
 
+    def _resolve_device(self, device_preference: Optional[str]) -> torch.device:
+        """Pick the best available torch device based on preference."""
+        preference = (device_preference or "auto").lower()
+        if preference == "auto":
+            if torch.cuda.is_available():
+                return torch.device("cuda")
+            if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                return torch.device("mps")
+            return torch.device("cpu")
+        try:
+            return torch.device(preference)
+        except (RuntimeError, ValueError) as exc:
+            logger.warning(
+                "Requested device '%s' is unavailable (%s); falling back to CPU",
+                device_preference,
+                exc,
+            )
+            return torch.device("cpu")
 
     def initialize_model(self):
         """Load the model and tokenizer using Hugging Face Transformers"""
         # Determine device
-        if self.config.device == "auto":
-            if not torch.cuda.is_available():
-                raise RuntimeError("Quantized loading requires a CUDA device, but no GPU is available.")
-            self.device = torch.device("cuda")
-        else:
-            self.device = torch.device(self.config.device)
-            if self.device.type != "cuda":
-                raise RuntimeError(
-                    f"Quantized loading requires a CUDA device, got '{self.device.type}'."
-                )
+        self.device = self._resolve_device(self.config.device)
+        supports_half_precision = self.device.type in {"cuda", "mps"}
+        model_dtype = torch.float16 if supports_half_precision else torch.float32
 
         # Load tokenizer and model
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -74,31 +85,31 @@ class AuditorAgent:
             self.tokenizer.bos_token = self.tokenizer.eos_token
             self.tokenizer.bos_token_id = self.tokenizer.eos_token_id
 
-        quant_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
-        )
+        # quant_config = BitsAndBytesConfig(
+        #     load_in_4bit=True,
+        #     bnb_4bit_use_double_quant=True,
+        #     bnb_4bit_quant_type="nf4",
+        #     bnb_4bit_compute_dtype=torch.float16,
+        # )
 
         self.model = AutoModelForCausalLM.from_pretrained(
             self.config.model_name,
             trust_remote_code=True,
-            quantization_config=quant_config,
-            device_map={"": str(self.device)},
-            torch_dtype=torch.float16,
+            #quantization_config=quant_config,
+            dtype=model_dtype,
         )
+        self.model.to(self.device)
         self.model.eval()
         # Ensure output head uses fp16 to match activations
         if hasattr(self.model, "lm_head") and self.model.lm_head is not None:
-            self.model.lm_head = self.model.lm_head.to(dtype=torch.float16, device=self.device)
+            self.model.lm_head = self.model.lm_head.to(dtype=model_dtype, device=self.device)
         if hasattr(self.model, "get_output_embeddings"):
             output_embeddings = self.model.get_output_embeddings()
             if output_embeddings is not None:
-                output_embeddings = output_embeddings.to(dtype=torch.float16, device=self.device)
+                output_embeddings = output_embeddings.to(dtype=model_dtype, device=self.device)
                 self.model.set_output_embeddings(output_embeddings)
         # Update config dtype hints
-        self.model.config.torch_dtype = torch.float16
+        self.model.config.torch_dtype = model_dtype
         if getattr(self.model, "generation_config", None) is not None:
             self.model.generation_config.pad_token_id = self.tokenizer.pad_token_id
             self.model.generation_config.eos_token_id = self.tokenizer.eos_token_id

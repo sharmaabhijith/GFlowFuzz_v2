@@ -12,7 +12,6 @@ from .environment import BookingConversationEnvironment
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 from agents.auditor.module import AuditorAgent, AuditorConfig
-from .trainer.ppo import PPOAlgorithm
 from .trainer.grpo import GRPOAlgorithm
 from .trainer.gflownet import GFlowNetAlgorithm
 
@@ -142,7 +141,7 @@ class TrainingSetup:
         self.console = console or Console()
         self._environment: Optional[BookingConversationEnvironment] = None
         self._policy: Optional[AuditorAgent] = None
-        self._trainer: Optional[PPOAlgorithm | GRPOAlgorithm | GFlowNetAlgorithm] = None
+        self._trainer: Optional[GRPOAlgorithm | GFlowNetAlgorithm] = None
         self._output_dir: Optional[Path] = None
         self._auditor_config: Optional[Dict[str, Any]] = None
 
@@ -237,15 +236,13 @@ class TrainingSetup:
             self._policy = policy
         return self._policy
 
-    def trainer(self) -> PPOAlgorithm | GRPOAlgorithm | GFlowNetAlgorithm:
+    def trainer(self) -> GRPOAlgorithm | GFlowNetAlgorithm:
         if self._trainer is None:
             algo_name = self.config.get("algorithm", "ppo").lower()
             if algo_name == "grpo":
                 trainer = GRPOAlgorithm(self.config, console=self.console)
             elif algo_name == "gflownet":
                 trainer = GFlowNetAlgorithm(self.config, console=self.console)
-            else:
-                trainer = PPOAlgorithm(self.config, console=self.console)
             trainer.setup_trainer(self.policy())
             self.console.print("[green]✓[/green] Trainer initialized")
             self._trainer = trainer

@@ -15,61 +15,6 @@ environment:
     policy_set_path: "policies/booking_policies.yaml"
   auditor:
     config_path: "agents/auditor/config.yaml"
-  process_reward:
-    default_reward: 0.01
-    armo:
-      enabled: true
-      model_path: ""  # Update with the local path to the ARMO reward checkpoint
-      device: "auto"
-      max_length: 1024
-      max_history_turns: 6
-      max_history_chars: 256
-      score_scale: 1.0
-      score_offset: 0.0
-      clamp_min: -1.0
-      clamp_max: 1.0
-      heuristics:
-        prompt_prefix: "Conversation transcript:"
-        min_char_length: 20
-        short_penalty: -0.1
-        max_char_length: 400
-        long_penalty: -0.05
-        question_bonus: 0.05
-        keywords:
-          - flight
-          - ticket
-          - booking
-          - reservation
-        keyword_bonus: 0.05
-        repetition_penalty: -0.2
-        empty_penalty: -0.5
-
-# PPO Training Configuration (Simplified)
-ppo:
-  # Basic training parameters
-  learning_rate: 1e-4
-  batch_size: 4
-  mini_batch_size: 2
-
-  # Reduced training scale for stability
-  max_epochs: 5
-
-  # PPO hyperparameters (conservative)
-  ppo_epochs: 2
-  gamma: 0.99
-  lam: 0.95
-  cliprange: 0.2
-  vf_coef: 0.1
-  ent_coef: 0.01
-  max_grad_norm: 0.5  # Reduced for stability
-
-  # Evaluation and saving
-  save_freq: 2
-  eval_freq: 1
-  logging_steps: 5
-
-  # Output directory
-  output_dir: "./ppo_training_output"
 
 # Evaluation Configuration (Minimal)
 evaluation:
@@ -86,6 +31,7 @@ hardware:
 
 # GRPO Training Configuration (using TRL)
 grpo:
+  device: "mps"
   # Basic training parameters
   learning_rate: 5e-5  # Slightly higher for LoRA updates
   batch_size: 1
@@ -135,6 +81,7 @@ grpo:
 
 # GFlowNet Training Configuration
 gflownet:
+  device: "mps"
   learning_rate: 5e-5
   log_z_learning_rate: 5e-5
   weight_decay: 0.0

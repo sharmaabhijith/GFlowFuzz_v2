@@ -30,7 +30,7 @@ class GFlowNetAlgorithm:
         self.config = config
         self.gfn_cfg = self.config.get("gflownet", {})
         self.console = console or Console()
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device(self.gfn_cfg.get("device"))
 
         self.grad_accum_steps = max(1, int(self.gfn_cfg.get("gradient_accumulation_steps", 1)))
         self.max_grad_norm = float(self.gfn_cfg.get("max_grad_norm", 1.0))
@@ -79,6 +79,7 @@ class GFlowNetAlgorithm:
         self.console.print("[green]✓[/green] GFlowNet trainer initialised")
         self.console.print(f"  - Learning rate: {learning_rate}")
         self.console.print(f"  - Log Z lr: {log_z_lr}")
+        self.console.print(f"  - Device: {self.device}")
         self.console.print(f"  - Grad accum steps: {self.grad_accum_steps}")
         self.console.print(f"  - Reward floor: {self.min_reward}")
         return self
@@ -342,4 +343,3 @@ class GFlowNetAlgorithm:
         model = get_peft_model(model, lora_config)
         policy_agent.model = model
         return model
-

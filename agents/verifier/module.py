@@ -38,6 +38,8 @@ class BookingVerifierAgent:
     def __init__(self, config_path: str):
         env_path = os.path.join(Path(__file__).parent.parent.parent, ".env")
         load_dotenv(env_path)
+        print("******")
+        print(env_path)
         api_key = os.environ.get('DEEPINFRA_API_KEY')
         
         with open(config_path, 'r') as f:
