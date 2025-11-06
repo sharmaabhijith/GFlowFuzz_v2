@@ -96,7 +96,7 @@ gflownet:
   use_shaped_rewards: true
   shaped_reward_coef: 0.2
   entropy_coef: 0.0
-  episodes: 20
+  episodes: 100
   gamma: 0.99
   save_freq: 2
   output_dir: "./gflownet_training_output"

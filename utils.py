@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import random
 import sqlite3
@@ -19,15 +20,10 @@ class BookingObjectiveGenerator:
     def __init__(
         self,
         db_path: Optional[Path | str] = None,
-        config: Optional[Dict[str, Any]] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
-        self.config = config or {}
         self.logger = logger or logging.getLogger(__name__)
         self._rng = random.Random()
-        seed = self.config.get("seed")
-        if seed is not None:
-            self._rng.seed(seed)
 
         self._db_path = self._resolve_db_path(db_path)
         self._origins, self._destinations = self._load_locations()
@@ -38,7 +34,9 @@ class BookingObjectiveGenerator:
 
         path = Path(db_path)
         if not path.is_absolute():
-            project_root = Path(__file__).resolve().parent.parent
+            # Resolve relative DB path against the project root (repo root).
+            # This file lives at the project root, so one parent is correct.
+            project_root = Path(__file__).resolve().parent
             path = project_root / path
 
         if not path.exists():
@@ -76,13 +74,6 @@ class BookingObjectiveGenerator:
             return [row[0] for row in cursor.fetchall() if row[0]]
         except sqlite3.Error as exc:
             raise RuntimeError(f"Failed to load city names from database: {exc}") from exc
-
-    def reset_seed(self, seed: Optional[int]) -> None:
-        """Reset the RNG seed (useful for reproducible experiments)."""
-        if seed is None:
-            self._rng = random.Random()
-            return
-        self._rng.seed(seed)
 
     def generate(self) -> str:
         """Generate a booking objective containing only origin and destination."""
@@ -229,3 +220,58 @@ class ConsoleReporter:
             table.add_row("Total Steps", str(total_steps))
         table.add_row("Model Saved To", str(output_dir))
         self.console.print(table)
+    
+    def format_verification_report(self, report: Dict[str, Any]) -> str:
+        """Format the verification report for display"""
+        if not report.get("verification_complete"):
+            return "Verification incomplete"
+        
+        output = []
+        output.append("\n" + "="*60)
+        output.append("📋 BOOKING VERIFICATION REPORT")
+        output.append("="*60)
+        
+        summary = report.get("summary", {})
+        output.append(f"\n📊 Summary:")
+        output.append(f"   Total Claims Checked: {summary.get('total_claims', 0)}")
+        output.append(f"   ✅ Verified: {summary.get('verified', 0)}")
+        output.append(f"   ❌ Not Found: {summary.get('not_found', 0)}")
+        output.append(f"   ⚠️ Errors: {summary.get('errors', 0)}")
+        
+        # Detailed results
+        output.append("\n📝 Detailed Results:")
+        output.append("-"*40)
+        
+        for i, detail in enumerate(report.get("details", []), 1):
+            output.append(f"\n{i}. Claim: {detail['claim']}")
+            
+            if detail['status'] == 'verified':
+                output.append(f"   Status: ✅ VERIFIED")
+                output.append(f"   Matches Found: {detail.get('matches_found', 0)}")
+                if detail.get('sample_data'):
+                    output.append(f"   Sample Match: {json.dumps(detail['sample_data'][0], indent=6)[:200]}...")
+            elif detail['status'] == 'not_found':
+                output.append(f"   Status: ❌ NOT FOUND IN DATABASE")
+                output.append(f"   Note: {detail.get('message', 'No matching records')}")
+            else:
+                output.append(f"   Status: ⚠️ ERROR")
+                output.append(f"   Error: {detail.get('error', 'Unknown error')}")
+        
+        # Warnings section
+        if report.get("warnings"):
+            output.append("\n⚠️ WARNINGS:")
+            output.append("-"*40)
+            for warning in report["warnings"]:
+                output.append(warning)
+        
+        # Conclusion
+        output.append("\n" + "="*60)
+        if summary.get('not_found', 0) > 0:
+            output.append("⚠️ Some booking claims could not be verified in the database.")
+            output.append("This may indicate that the assistant provided incorrect information.")
+        elif summary.get('verified', 0) == summary.get('total_claims', 0):
+            output.append("✅ All booking claims have been successfully verified!")
+        
+        output.append("="*60 + "\n")
+        
+        return "\n".join(output)

@@ -24,7 +24,7 @@ from training.setup import (
     save_metrics,
     load_config,
 )
-from training.utils import BookingObjectiveGenerator, ConsoleReporter
+from utils import BookingObjectiveGenerator, ConsoleReporter
 from training.oracle import Oracle
 
 
@@ -66,12 +66,10 @@ def run_training(config: Dict[str, Any]) -> None:
         policy_bundle=policy_bundle,
     )
 
-    objective_generator_cfg = config.get("objective_generator", {})
     env_cfg = config.get("environment", {})
     db_path = env_cfg.get("booking_agent_config", {}).get("db_path")
     objective_generator = BookingObjectiveGenerator(
         db_path=db_path,
-        config=objective_generator_cfg,
         logger=logging.getLogger(__name__),
     )
 

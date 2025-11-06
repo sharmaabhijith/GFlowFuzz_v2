@@ -78,7 +78,6 @@ class BookingConversationEnvironment:
         db_path = self.booking_agent_config['db_path']
         server_path = self.booking_agent_config['server_path']
         self.booking_agent = FlightBookingChatAgent(chat_config_path, db_path, server_path)
-        self.booking_agent.initialize()
         # Initialize verifier agent
         verifier_config_path = self.verifier_config['config_path']
         self.verifier_agent = BookingVerifierAgent(verifier_config_path)
@@ -136,7 +135,7 @@ class BookingConversationEnvironment:
             raise ValueError("Environment is terminated. Call reset() to start a new conversation.")
 
         # Get booking agent response (it handles conversation history internally)
-        booking_response = self.booking_agent._process_user_message(user_action)
+        booking_response = self.booking_agent.generate_chat_message(user_action)
         # Update state
         self.current_state.turn_count += 1
         if self.booking_agent:
@@ -149,7 +148,7 @@ class BookingConversationEnvironment:
         if done and not self.final_booking_summary:
             try:
                 # Generate the final booking summary
-                self.final_booking_summary = self.booking_agent._generate_booking_summary()
+                self.final_booking_summary = self.booking_agent.generate_booking_summary()
             except Exception as e:
                 self.logger.warning(f"Could not generate booking summary: {e}")
                 self.final_booking_summary = None
@@ -252,9 +251,3 @@ class BookingConversationEnvironment:
         max_length_reached = self.current_state.turn_count >= self.max_conversation_length
 
         return user_wants_to_quit or thank_you_closing or booking_complete or max_length_reached
-
-
-    def _generate_booking_objective(self) -> str:
-        """Generate a simple fallback booking objective if none is provided."""
-        self.logger.warning("No booking objective provided; using fallback objective")
-        return "I need to fly from New York to London"

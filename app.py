@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import time
 
 # Rich imports for beautiful terminal interface
@@ -32,9 +32,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from training.setup import TrainingSetup, load_config
-from training.utils import BookingObjectiveGenerator, ConsoleReporter
+from utils import BookingObjectiveGenerator, ConsoleReporter
 from agents.chat.module import FlightBookingChatAgent
 from agents.user.module import FlightBookingUserAgent
+from utils import ConsoleReporter
 
 # Custom theme for professional look
 custom_theme = Theme({
@@ -273,7 +274,6 @@ class FlightBookingApp:
                 db_path=str(self.database_path),
                 server_path=str(self.server_path)
             )
-            agent.initialize()
             time.sleep(1)  # Visual effect
             
         # Welcome message
@@ -310,7 +310,7 @@ class FlightBookingApp:
                         "[dim cyan]Processing final message...[/dim cyan]", 
                         spinner="dots12"
                     ):
-                        response = agent._process_user_message(user_input)
+                        response = agent.generate_chat_message(user_input)
                         time.sleep(0.5)
                     
                     # Display response
@@ -342,7 +342,7 @@ class FlightBookingApp:
                     "[dim cyan]AI is processing your request...[/dim cyan]", 
                     spinner="dots12"
                 ):
-                        response = agent._process_user_message(user_input)
+                        response = agent.generate_chat_message(user_input)
                         time.sleep(0.5)  # Small delay for realism
                 
                 # Display response in professional panel
@@ -439,7 +439,7 @@ class FlightBookingApp:
         
         try:
             with self.console.status("[dim]Processing conversation history...[/dim]", spinner="dots12"):
-                booking_summary = agent._generate_booking_summary()
+                booking_summary = agent.generate_booking_summary()
                 time.sleep(1)
             
             summary_panel = Panel(
@@ -464,7 +464,7 @@ class FlightBookingApp:
                     time.sleep(1)
                 
                 # Format and display verification report
-                formatted_report = agent.verifier.format_verification_report(verification_report)
+                formatted_report = ConsoleReporter.format_verification_report(verification_report)
                 
                 verification_panel = Panel(
                     formatted_report,
@@ -556,6 +556,151 @@ class FlightBookingApp:
         if self._has_booking_claims(chat_agent):
             self._run_simulation_verification(chat_agent)
     
+    @staticmethod
+    def _should_end_simulation(history: List[Dict[str, str]]) -> bool:
+        """Mirror the legacy user-agent termination heuristic."""
+        if len(history) < 4:
+            return False
+        recent_text = " ".join(message["content"].lower() for message in history[-3:])
+        completion_indicators = [
+            "booking confirmed",
+            "reservation complete",
+            "thank you for booking",
+            "booking reference",
+            "confirmation number",
+            "all set",
+            "booking successful",
+        ]
+        if any(indicator in recent_text for indicator in completion_indicators):
+            return True
+        return len(history) > 16
+
+    def _simulate_booking_conversation(
+        self,
+        user_agent: FlightBookingUserAgent,
+        chat_agent: FlightBookingChatAgent,
+        objective: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Run a single automated user/chat simulation with console output."""
+        self.console.print()
+        self.console.print(
+            Panel(
+                "[bold magenta]Starting Natural User Conversation Simulation[/bold magenta]",
+                box=box.DOUBLE,
+                border_style="magenta",
+            )
+        )
+
+        selected_objective = objective or (
+            self.objective_generator.generate() if self.objective_generator else "I need a flight booking."
+        )
+        user_agent.booking_objective = selected_objective
+        user_agent.conversation_history = []
+
+        objective_panel = Panel(
+            f"[bold cyan]Booking Objective:[/bold cyan] {selected_objective}",
+            title="[bold yellow]🎯 USER OBJECTIVE[/bold yellow]",
+            border_style="yellow",
+            box=box.ROUNDED,
+        )
+        self.console.print(objective_panel)
+
+        max_turns = 10
+        conversation_ended = False
+
+        for turn in range(max_turns):
+            if turn > 0 and self._should_end_simulation(user_agent.conversation_history):
+                user_message = "Great, thank you for your help! quit"
+            else:
+                user_message = user_agent.generate_user_message(
+                    {"turn": turn, "history": list(user_agent.conversation_history)}
+                )
+
+            user_text = Text()
+            user_text.append("👤 USER", style="bold cyan")
+            user_panel = Panel(
+                user_message,
+                title=user_text,
+                border_style="cyan",
+                box=box.ROUNDED,
+                padding=(1, 2),
+            )
+            self.console.print(user_panel)
+
+            user_agent.conversation_history.append({"role": "user", "content": user_message})
+
+            lower_message = user_message.lower()
+            if "quit" in lower_message or "exit" in lower_message:
+                conversation_ended = True
+                self.console.print(
+                    Panel(
+                        "[bold green]✅ User ended conversation properly[/bold green]",
+                        border_style="green",
+                        box=box.ROUNDED,
+                    )
+                )
+                break
+
+            try:
+                response = chat_agent.generate_chat_message(user_message)
+            except Exception as exc:
+                self.console.print(f"[red]Error: {exc}[/red]")
+                break
+
+            assistant_text = Text()
+            assistant_text.append("🤖 ASSISTANT", style="bold green")
+            display_response = response if len(response) <= 500 else response[:500] + "\n\n[Response truncated...]"
+            assistant_panel = Panel(
+                display_response,
+                title=assistant_text,
+                border_style="green",
+                box=box.ROUNDED,
+                padding=(1, 2),
+            )
+            self.console.print(assistant_panel)
+
+            user_agent.conversation_history.append({"role": "assistant", "content": response})
+            time.sleep(1)
+
+        if not conversation_ended:
+            quit_message = "Thanks! quit"
+            self.console.print(
+                Panel(
+                    f"[yellow]Auto-ending conversation:[/yellow] {quit_message}",
+                    border_style="yellow",
+                )
+            )
+            user_agent.conversation_history.append({"role": "user", "content": quit_message})
+            try:
+                chat_agent.generate_chat_message(quit_message)
+            except Exception:
+                pass
+
+        result = {
+            "objective": selected_objective,
+            "conversation_length": len(user_agent.conversation_history),
+            "properly_ended": conversation_ended,
+            "conversation_history": list(user_agent.conversation_history),
+        }
+
+        self.console.print()
+        summary_table = Table(
+            title="[bold green]Conversation Summary[/bold green]",
+            box=box.ROUNDED,
+            border_style="green",
+        )
+        summary_table.add_column("Metric", style="cyan")
+        summary_table.add_column("Value", style="white")
+        summary_table.add_row(
+            "Objective",
+            result["objective"][:50] + "..." if len(result["objective"]) > 50 else result["objective"],
+        )
+        summary_table.add_row("Messages", str(result["conversation_length"]))
+        summary_table.add_row("Properly Ended", "✅ Yes" if result["properly_ended"] else "❌ No")
+        self.console.print(summary_table)
+
+        return result
+
     def _run_simulations(self, user_agent, chat_agent, iterations=1, objective: Optional[str] = None):
         """Run simulation with progress tracking"""
         results = []
@@ -574,7 +719,7 @@ class FlightBookingApp:
             )
                 
             # Run single simulation
-            result = user_agent.run_user_simulation(chat_agent, objective=objective)
+            result = self._simulate_booking_conversation(user_agent, chat_agent, objective=objective)
             results.append(result)
             
             progress.advance(main_task)
@@ -628,7 +773,7 @@ class FlightBookingApp:
             # Generate booking summary first
             self.console.print("\n[highlight]📋 Generating Booking Summary...[/highlight]")
             with self.console.status("[dim]Processing conversation...[/dim]", spinner="dots12"):
-                booking_summary = chat_agent._generate_booking_summary()
+                booking_summary = chat_agent.generate_booking_summary()
                 time.sleep(0.5)
             
             summary_panel = Panel(
@@ -650,7 +795,7 @@ class FlightBookingApp:
                 time.sleep(0.5)
             
             # Display verification report
-            formatted_report = chat_agent.verifier.format_verification_report(verification_report)
+            formatted_report = ConsoleReporter.format_verification_report(verification_report)
             verification_panel = Panel(
                 formatted_report,
                 title="[bold]Simulation Verification Report[/bold]",
