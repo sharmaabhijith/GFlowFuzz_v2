@@ -80,10 +80,17 @@ def detect_non_compliance(
     policy_bundle: Dict[str, Any],
     messages: Sequence[Dict[str, str]],
 ) -> tuple[int, str]:
+    if judge is None:
+        return 0, ""
+
     result = judge.evaluate(messages, policy_bundle)
-    reward = result.reward
-    violations = result.violations["policy_title"]
-    return reward, violations
+    print("JUDGE RESULT:", result)
+    violations = result.violations if isinstance(getattr(result, "violations", None), list) else []
+    titles = [str(v.get("policy_title")) for v in violations]
+
+    non_compliance_flag = result.reward
+    reasons = "; ".join(titles)
+    return non_compliance_flag, reasons
 
 
 def run_episode(
@@ -94,6 +101,7 @@ def run_episode(
     judge: Optional[PolicyJudgeAgent],
     policy_bundle: Dict[str, Any],
     max_dialogues: int,
+    attempts: int,
 ) -> Optional[Dict[str, Any]]:
 
     reset_agents(chat, user, objective)
@@ -101,39 +109,31 @@ def run_episode(
     dialogues = 0
     confabulation_flag = 0
     non_compliance_flag = 0
-    attempts = 0
+
+    attempts += 1
+    print("ATTEMPTS:", attempts)
+    if attempts > 3:
+        return None
 
     while True:
-
-        attempts += 1
-        if attempts > 3:
-            return None
         
         user_message = user.generate_user_message(chat.conversation_history, objective)
         chat.conversation_history.append({"role": "user", "content": user_message})
         print("USER:", user_message)
-
         normalized_user = user_message.lower()
         if any(q in normalized_user for q in QUIT_WORDS):
             confabulation_flag = detect_confabulation(chat, verifier)
-            non_compliance_flag, reason = detect_non_compliance(judge, policy_bundle, chat.conversation_history)
+            non_compliance_flag, reasons = detect_non_compliance(judge, policy_bundle, chat.conversation_history)
+            print("CHAT ENDED")
+            print("-" * 30)
             break
-
         assistant_message = chat.generate_chat_message(user_message)
         chat.conversation_history.append({"role": "assistant", "content": assistant_message})
         print("ASSISTANT:", assistant_message)
 
         dialogues += 1
         if dialogues > max_dialogues:
-            return run_episode(
-                objective,
-                user,
-                chat,
-                verifier,
-                judge,
-                policy_bundle,
-                max_dialogues,
-            )
+            return run_episode(objective, user, chat, verifier, judge, policy_bundle, max_dialogues, attempts)
 
     reward = {
         "non_compliance": int(non_compliance_flag),
@@ -144,17 +144,17 @@ def run_episode(
         "objective": objective,
         "messages": chat.conversation_history,
         "reward": reward,
-        "reason": reason if non_compliance_flag else "confabulation",
+        "reason": reasons if non_compliance_flag else "confabulation",
     }
 
 
 def main() -> None:
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=5000)
+    parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--out", type=str, default="dataset/conversations.jsonl")
     parser.add_argument("--max_dialogues", type=int, default=30)
-    parser.add_argument("--log_every", type=int, default=10, help="Print progress every N episodes")
+    parser.add_argument("--log_every", type=int, default=1, help="Print progress every N episodes")
     args = parser.parse_args()
     resources = load_resources()
     policy_bundle = load_yaml(resources["policy_path"])
@@ -191,10 +191,11 @@ def main() -> None:
         while saved < args.episodes:
 
             objective = objective_generator.generate()
-            result = run_episode(objective, user, chat, verifier, judge, policy_bundle, max_diag)
+            print(f"[Dataset] Episode {saved + 1} | Objective: {objective}")
+            result = run_episode(objective, user, chat, verifier, judge, policy_bundle, max_diag, 0)
             if not result:
                 continue
-            
+
             episode = {
                 "episode_id": str(saved + 1),
                 "objective": result["objective"],

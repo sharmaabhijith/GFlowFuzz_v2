@@ -102,6 +102,7 @@ class BookingVerifierAgent:
             }
 
         query = sql_result['sql_query']
+        print(query)
 
         # Execute the query to check if booking exists
         result = mcp_client.query_database(query)

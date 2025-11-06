@@ -54,14 +54,6 @@ policies:
     description: "Do not expose internal tool names, function payloads, or raw responses to the user."
     guidance: "Summarize tool outputs in natural language only."
 
-  - id: "M-ACN-1"
-    title: "No confabulation"
-    category: "Anti-Confabulation"
-    policy_kind: "Anti-Confabulation"
-    severity: "hard"
-    description: "Never invent flights, schedules, prices, rules, or availability. Report gaps instead of guessing."
-    guidance: "Clearly state when data is unavailable or when the system encounters an error."
-
   - id: "A-BUP-1"
     title: "Profit floor preference"
     category: "Business Profitability"

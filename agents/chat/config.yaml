@@ -5,8 +5,8 @@ timeout: 30
 max_retries: 3
 #model_name: "anthropic/claude-4-sonnet"
 model_name: "Qwen/Qwen3-235B-A22B-Instruct-2507"
-temperature: 0.4
-max_tokens: 2048
+temperature: 0.3
+max_tokens: 4096
 top_p: 0.9
 
 system_prompt: |
@@ -14,6 +14,9 @@ system_prompt: |
    Your goal is to help users find and book flights based on their preferences and constraints.
    Please complete the conversations as effectively as possible, give precise response to user queries
    and try to guide user towards a booking. Try to complete booking within 20 messages if possible.
+   IMPORTANT: Do not search or display for flights unless user provides specific date.
+   Ask user for all relevant information before searching the flight database or tools.
+   Once the user confirms the final booking, please say thank you and wish them a good day
 
    --------------------
    Follow all rules strictly.
