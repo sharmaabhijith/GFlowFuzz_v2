@@ -1,342 +1,172 @@
-# ✈️ AI Flight Booking System
+# Agents, Policies, and MCP Database
 
-An intelligent multi-agent flight booking system that combines natural language processing, automated testing, and database verification to provide a robust flight reservation experience.
+This document explains the system’s agents, the booking policies they follow, and how the Model Context Protocol (MCP) database integration works. It intentionally ignores training and dataset topics.
 
-## 🌟 Features
+## Overview
+- Agents orchestrate the conversation, simulate users, generate SQL, and verify bookings.
+- Policies define mandatory and advisory rules for behavior and safety.
+- MCP provides read‑only database tools used to query the SQLite flights database.
 
-### 🤖 Multi-Agent Architecture
-- **Chat Agent**: Natural conversation interface for flight bookings
-- **User Agent**: Simulates realistic user interactions for testing
-- **Coder Agent**: Handles database queries and booking operations
-- **Verifier Agent**: Validates all booking claims against the database
+## Agents
 
-### 💬 Intelligent Chat Interface
-- Natural language understanding for flight searches
-- Context-aware conversation tracking
-- Automatic booking information extraction
-- Professional Rich terminal UI with color-coded responses
+### Chat Agent
+- Path: `agents/chat/module.py`
+- Config: `agents/chat/config.yaml`
+- Role: Conversational booking assistant that manages context, extracts booking details, searches flights via SQL, and generates a concise final booking summary.
+- Key integrations:
+  - Uses `SQLCoderAgent` to convert user intent into safe SQL.
+  - Calls the MCP database server (through `MCPClient`) to run read‑only queries.
+  - Maintains booking context and produces a final summary for verification.
 
-### 🧪 Automated Testing
-- Realistic user simulation with dynamic personas
-- Random booking objective generation
-- Comprehensive conversation flow testing
-- Success rate analytics and reporting
+Minimal usage example:
 
-### ✅ Verification System
-- Automatic verification of booking claims
-- Database cross-referencing
-- Discrepancy detection and reporting
-- JSON export of verification results
+```python
+from agents.chat.module import FlightBookingChatAgent
 
-## 🚀 Quick Start
+agent = FlightBookingChatAgent(
+    config_path="agents/chat/config.yaml",
+    db_path="database/flights.db",
+    server_path="mcp-server/database_server.py",
+)
 
-### Prerequisites
-- Python 3.8+
-- pip package manager
-
-### Installation
-
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/flight-booking-system.git
-cd flight-booking-system
+print(agent.generate_chat_message("Find me a morning flight from JFK to LHR in business next month"))
+print("\nSummary:\n", agent.generate_booking_summary())
 ```
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
+### User Agent
+- Path: `agents/user/module.py`
+- Config: `agents/user/config.yaml`
+- Role: LLM‑backed user simulator that produces realistic user turns given a conversation history and an objective (used for auditing/testing flows).
+
+Example:
+
+```python
+from agents.user.module import FlightBookingUserAgent
+
+user = FlightBookingUserAgent("agents/user/config.yaml")
+history = [{"role": "assistant", "content": "Where are you flying from and to?"}]
+print(user.generate_user_message(history, "Fly NYC → London in 2026, 1 pax, business"))
 ```
 
-3. Set up your API key:
-Create a `.env` file in the project root:
-```env
-DEEPINFRA_API_KEY=your_api_key_here
+### Coder Agent (SQL)
+- Path: `agents/coder/module.py`
+- Role: Generates validated, read‑only SQL from natural language + recent context.
+- Method: `generate_sql_query(user_request, conversation_history=None)`
+  - Returns `{ "sql_query": str, "success": bool, "error": Optional[str] }`
+  - Validation enforces SELECT‑only and basic structure expectations before queries are executed.
+
+### Verifier Agent
+- Path: `agents/verifier/module.py`
+- Config: `agents/verifier/config.yaml`
+- Role: Validates the final booking summary against the database (exists or not) using the MCP client. Returns a result dict including `verification_complete`, `booking_exists`, and a simple reward signal.
+
+Example (with an existing ChatAgent instance):
+
+```python
+from agents.verifier.module import BookingVerifierAgent
+from mcp_client import create_mcp_client  # provided in mcp-client/mcp_client.py
+
+mcp = create_mcp_client("mcp-server/database_server.py", "database/flights.db")
+verifier = BookingVerifierAgent("agents/verifier/config.yaml")
+
+summary = agent.generate_booking_summary()
+print(verifier.verify_booking(summary, mcp))
 ```
 
-### Running the Application
+## Policies
 
-#### Interactive Mode (Default)
-```bash
-python app.py
+- Source file: `policies/booking_policies.yaml`
+- Structure: Each policy has `id`, `title`, `category`, `policy_kind` (Mandatory or Advisory), `severity`, `description`, and `guidance`.
+- Core themes reflected in system prompts (and expected agent behavior):
+  - Confirmation before booking (E‑GEN‑3)
+  - Banned destination handling (M‑REG‑1)
+  - Seat availability sanity (M‑RES‑1)
+  - Canonical USD pricing (M‑RES‑2)
+  - Conceal internal tool details (M‑PRY‑2)
+  - Advisory behaviors around clarification, precision, and profitability
+
+The chat and user agent system prompts embed these policies to drive behavior. You can also load and apply them programmatically:
+
+```python
+import yaml
+
+with open("policies/booking_policies.yaml", "r") as f:
+    policy_bundle = yaml.safe_load(f)
+
+policies = policy_bundle.get("policies", [])
+mandatory = [p for p in policies if p.get("policy_kind") == "Mandatory"]
+advisory = [p for p in policies if p.get("policy_kind") == "Advisory"]
 ```
 
-#### Direct Simulation Mode
-```bash
-python app.py --auto
+## MCP Database
+
+### What is MCP here?
+The repository uses the Model Context Protocol (MCP) to expose a read‑only SQLite flight database as tools callable from agents. The client starts the server over stdio when needed (no long‑running service required).
+
+### Components
+- Server: `mcp-server/database_server.py`
+  - Enforces SELECT‑only, blocks DDL/DML, adds a `LIMIT` when missing.
+  - Tools exposed:
+    - `query_database` — run SELECT with optional params and limit
+    - `get_table_schema` — detailed table schema (columns, FKs, indexes, DDL)
+    - `list_tables` — tables/views with row counts
+    - `describe_database` — global overview and object summary
+    - `search_tables` — search by table/column names
+    - `get_foreign_keys` — FK relationships
+    - `explain_query` — query plan without executing it
+- Client: `mcp-client/mcp_client.py`
+  - Class: `MCPClient(server_script_path, database_path)`
+  - Convenience: `create_mcp_client(server_script_path, database_path)`
+  - Returns `ToolResult` with `.success`, `.result` (JSON/text), `.error_message`.
+- Database: `database/flights.db` (SQLite, read‑only access by server)
+
+### Quick examples
+
+Querying the database directly:
+
+```python
+import json, sys, os
+sys.path.append("mcp-client")  # ensure module path for mcp_client.py
+from mcp_client import MCPClient
+
+client = MCPClient("mcp-server/database_server.py", "database/flights.db")
+
+res = client.query_database("SELECT flight_number, price, currency FROM flights WHERE departure_airport='JFK' AND arrival_airport='LHR' ORDER BY price ASC")
+if res.success:
+    data = json.loads(res.result)
+    print("Rows:", data.get("row_count"))
+    print("First:", (data.get("results") or [None])[0])
+else:
+    print("Error:", res.error_message)
 ```
 
-## 📖 Usage Guide
+Exploring the schema:
 
-### Mode Selection
-Upon starting, you'll be prompted to choose:
-1. **Chat Mode** - Interactive conversation with the booking assistant
-2. **Simulation Mode** - Automated testing with AI user agent
+```python
+import json, sys
+sys.path.append("mcp-client")
+from mcp_client import MCPClient
 
-### Chat Mode Commands
-- Type naturally to search for flights
-- Say `"thank you, quit"` to exit with booking summary and verification
-- Type `"quit"` or `"exit"` for quick exit
-- Type `"help"` for available commands
+client = MCPClient("mcp-server/database_server.py", "database/flights.db")
 
-### Example Conversations
+print("Tools:", [t["name"] for t in client.get_available_tools()])
+schema = client.get_table_schema("flights")
+print(json.loads(schema.result)["columns"])  # column definitions
 
-#### Booking a Flight
-```
-You: I need a flight from New York to London next week
-Assistant: I'll help you find flights from New York to London...
-You: I prefer morning flights in business class
-Assistant: Here are the available morning business class flights...
+tables = client.list_tables()
+print(json.loads(tables.result)["tables"])  # tables and row counts
 ```
 
-#### Ending with Verification
-```
-You: Thanks, quit
-[System generates booking summary]
-[System runs verification against database]
-[System displays verification report]
-```
+### How agents use MCP
+1. Chat Agent asks `SQLCoderAgent` to generate a safe SELECT.
+2. Chat Agent executes the SQL via `MCPClient.query_database(...)`.
+3. Results are parsed and formatted for the user (with policy constraints like USD pricing and seat availability in the prompt).
+4. Verifier Agent optionally checks the final booking summary with MCP to decide if it already exists.
 
-## 🏗️ Architecture
+## Environment
+- API key: set `DEEPINFRA_API_KEY` in `.env` at the repo root.
+- Default model and behavior are configured per agent under their `config.yaml` files.
 
-### System Components
+## Notes
+- This guide focuses on agents, policies, and the MCP database. It intentionally does not cover training pipelines or dataset preparation.
 
-```mermaid
-graph TB
-    subgraph "Frontend Layer"
-        APP[Main Application<br/>app.py<br/>Rich Terminal UI]
-    end
-    
-    subgraph "Agent Layer"
-        CHAT[Chat Agent<br/>Natural Language Processing<br/>Context Management]
-        USER[User Agent<br/>Simulation & Testing<br/>Dynamic Personas]
-        CODER[Coder Agent<br/>SQL Operations<br/>Database Queries]
-        VERIFIER[Verifier Agent<br/>Claim Validation<br/>Report Generation]
-    end
-    
-    subgraph "Integration Layer"
-        MCP[MCP Client<br/>Tool Orchestration<br/>API Management]
-    end
-    
-    subgraph "Data Layer"
-        DB[(SQLite Database<br/>Flights & Bookings)]
-        SERVER[Database Server<br/>MCP Protocol Handler]
-    end
-    
-    subgraph "External Services"
-        LLM[DeepInfra LLM API<br/>Llama Models]
-    end
-    
-    APP -->|Mode Selection| CHAT
-    APP -->|Simulation Mode| USER
-    
-    CHAT <-->|Conversation| USER
-    CHAT -->|Booking Context| VERIFIER
-    CHAT -->|Database Operations| CODER
-    
-    CODER -->|SQL Queries| MCP
-    VERIFIER -->|Verification Queries| MCP
-    
-    MCP <-->|MCP Protocol| SERVER
-    SERVER <-->|Read/Write| DB
-    
-    CHAT -->|API Calls| LLM
-    USER -->|API Calls| LLM
-    VERIFIER -->|API Calls| LLM
-    
-    style APP fill:#e1f5fe
-    style CHAT fill:#fff3e0
-    style USER fill:#f3e5f5
-    style CODER fill:#e8f5e9
-    style VERIFIER fill:#fce4ec
-    style MCP fill:#f5f5f5
-    style DB fill:#e0f2f1
-    style LLM fill:#ede7f6
-```
-
-### Detailed System Flow
-
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                         FLIGHT BOOKING SYSTEM                      │
-├────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐ │
-│  │                    🖥️  PRESENTATION LAYER                    │ │
-│  │                                                              │ │
-│  │  ┌────────────────────────────────────────────────────────┐ │ │
-│  │  │               Main Application (app.py)                │ │ │
-│  │  │  • Rich Terminal UI  • Mode Selection  • Progress Bars │ │ │
-│  │  └──────────────┬─────────────────────────────────────────┘ │ │
-│  └─────────────────┼────────────────────────────────────────────┘ │
-│                    │                                               │
-│  ┌─────────────────▼────────────────────────────────────────────┐ │
-│  │                    🤖  AGENT ORCHESTRATION                   │ │
-│  │                                                              │ │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌──────────────────────┐│ │
-│  │  │ Chat Agent  │  │ User Agent  │  │   Verifier Agent     ││ │
-│  │  │             │◄─►│             │  │                      ││ │
-│  │  │ • NLP       │  │ • Simulate  │  │ • Validate Claims    ││ │
-│  │  │ • Context   │  │ • Test      │  │ • Check Database     ││ │
-│  │  │ • Summary   │  │ • Personas  │  │ • Generate Reports   ││ │
-│  │  └──────┬──────┘  └─────────────┘  └──────────┬───────────┘│ │
-│  │         │                                      │             │ │
-│  │  ┌──────▼───────────────────────────────────────┐           │ │
-│  │  │              Coder Agent                     │           │ │
-│  │  │  • Execute SQL  • Process Bookings           │           │ │
-│  │  │  • Search Flights  • Handle Reservations     │           │ │
-│  │  └──────────────────┬───────────────────────────┘           │ │
-│  └─────────────────────┼────────────────────────────────────────┘ │
-│                        │                                           │
-│  ┌─────────────────────▼────────────────────────────────────────┐ │
-│  │                    🔧  TOOL INTEGRATION                      │ │
-│  │                                                              │ │
-│  │  ┌────────────────────────────────────────────────────────┐ │ │
-│  │  │                    MCP Client                          │ │ │
-│  │  │  • Tool Registration  • Request Handling               │ │ │
-│  │  │  • Response Parsing   • Error Management               │ │ │
-│  │  └─────────────────────┬──────────────────────────────────┘ │ │
-│  └────────────────────────┼─────────────────────────────────────┘ │
-│                           │                                        │
-│  ┌────────────────────────▼─────────────────────────────────────┐ │
-│  │                    💾  DATA PERSISTENCE                      │ │
-│  │                                                              │ │
-│  │  ┌───────────────────────┐  ┌─────────────────────────────┐ │ │
-│  │  │   Database Server      │  │     SQLite Database         │ │ │
-│  │  │                        │◄─►                             │ │ │
-│  │  │  • MCP Protocol        │  │  • Flights Table           │ │ │
-│  │  │  • Query Execution     │  │  • Bookings Table          │ │ │
-│  │  │  • Transaction Mgmt    │  │  • Users Table             │ │ │
-│  │  └───────────────────────┘  └─────────────────────────────┘ │ │
-│  └───────────────────────────────────────────────────────────────┘ │
-│                                                                     │
-│  ┌───────────────────────────────────────────────────────────────┐ │
-│  │                    ☁️  EXTERNAL SERVICES                     │ │
-│  │                                                              │ │
-│  │  ┌────────────────────────────────────────────────────────┐ │ │
-│  │  │              DeepInfra LLM API                         │ │ │
-│  │  │  • Llama-3.1 Models  • Natural Language Understanding  │ │ │
-│  │  └────────────────────────────────────────────────────────┘ │ │
-│  └───────────────────────────────────────────────────────────────┘ │
-│                                                                     │
-└────────────────────────────────────────────────────────────────────┘
-```
-
-### Agent Responsibilities
-
-#### Chat Agent (`agents/chat/`)
-- Manages user conversations
-- Extracts booking information using LLM
-- Maintains conversation context
-- Generates booking summaries
-
-#### User Agent (`agents/user/`)
-- Simulates realistic user behavior
-- Generates random booking objectives
-- Tests system robustness
-- Provides natural conversation flow
-
-#### Coder Agent (`agents/coder/`)
-- Executes database queries
-- Handles booking operations
-- Manages flight searches
-- Processes reservations
-
-#### Verifier Agent (`agents/verifier/`)
-- Validates booking claims
-- Cross-references with database
-- Identifies discrepancies
-- Generates verification reports
-
-## 📊 Database Schema
-
-The system uses SQLite with the following main tables:
-
-### Flights Table
-- `flight_id`: Unique identifier
-- `origin`: Departure city
-- `destination`: Arrival city
-- `departure_date`: Flight date
-- `price`: Ticket price
-- `available_seats`: Remaining capacity
-
-### Bookings Table
-- `booking_id`: Unique identifier
-- `flight_id`: Reference to flight
-- `passenger_name`: Traveler name
-- `booking_date`: Reservation timestamp
-- `status`: Booking status
-
-## 🔧 Configuration
-
-### Agent Configuration Files
-Each agent has a `config.yaml` file in its directory:
-- `agents/chat/config.yaml` - Chat agent settings
-- `agents/user/config.yaml` - User simulation settings
-- `agents/verifier/config.yaml` - Verification parameters
-
-### Model Configuration
-The system uses DeepInfra API with configurable models:
-- Default: `meta-llama/Llama-3.1-8B-Instruct`
-- Adjustable temperature and token limits
-- Customizable system prompts
-
-## 📝 Output Files
-
-The system generates various output files:
-
-- `booking_summary_[timestamp].txt` - Chat session summaries
-- `booking_verification_[timestamp].json` - Verification reports
-- `simulation_report_[timestamp].json` - Test results
-- `simulation_verification_[timestamp].json` - Simulation verification
-
-## 🛠️ Development
-
-### Project Structure
-```
-flight-booking-system/
-├── app.py                 # Main application with Rich UI
-├── agents/
-│   ├── chat/             # Chat agent module
-│   ├── user/             # User simulation agent
-│   ├── coder/            # Database operations agent
-│   └── verifier/         # Verification agent
-├── mcp-client/           # MCP client for tool calling
-├── mcp-server/           # Database server
-├── database/             # SQLite database files
-├── .env                  # Environment variables
-└── requirements.txt      # Python dependencies
-```
-
-### Adding New Features
-1. Extend agent capabilities in respective modules
-2. Update configuration files as needed
-3. Modify UI components in `app.py`
-4. Add new verification rules in verifier agent
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 🙏 Acknowledgments
-
-- Built with [Rich](https://github.com/Textualize/rich) for beautiful terminal UI
-- Powered by [DeepInfra](https://deepinfra.com/) for LLM capabilities
-- Uses MCP (Model Context Protocol) for tool integration
-
-## 📞 Support
-
-For issues, questions, or suggestions, please open an issue on GitHub.
-
----
-
-**Made with ❤️ by the AI Flight Booking Team**
