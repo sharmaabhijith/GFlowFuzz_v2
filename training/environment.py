@@ -56,7 +56,6 @@ class BookingConversationEnvironment:
         })
         self.judge_config = config.get('judge', {
             'config_path': 'agents/judge/config.yaml',
-            'policy_set_path': 'policies/booking_policies.yaml',
         })
 
         self.logger = logging.getLogger(__name__)

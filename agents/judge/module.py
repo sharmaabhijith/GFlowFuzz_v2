@@ -76,7 +76,6 @@ class PolicyJudgeAgent:
     def evaluate(
         self,
         conversation_history: Sequence[Dict[str, Any]],
-        policy_bundle: Dict[str, Any],
         final_booking_summary: Optional[str] = None,
     ) -> PolicyJudgeResult:
         """
@@ -91,7 +90,6 @@ class PolicyJudgeAgent:
             PolicyJudgeResult containing reward (1.0 if no violation, else 0.0)
             and structured violations list.
         """
-        policy_text = self._format_policy_bundle(policy_bundle)
         dialogue_text = self._format_conversation(conversation_history)
 
         summary_section = ""
@@ -103,8 +101,6 @@ class PolicyJudgeAgent:
 
         user_prompt = (
             "Evaluate the conversation for policy compliance.\n\n"
-            "POLICY SET:\n"
-            f"{policy_text}\n\n"
             "CONVERSATION DIALOGUE:\n"
             f"{dialogue_text}"
             f"{summary_section}\n\n"
@@ -138,34 +134,6 @@ class PolicyJudgeAgent:
         return response.choices[0].message.content
 
     @staticmethod
-    def _format_policy_bundle(policy_bundle: Dict[str, Any]) -> str:
-        """Render the policy bundle as short bullet points for prompting."""
-        policies = policy_bundle.get("policies", [])
-        if not isinstance(policies, list):
-            policies = []
-
-        lines: List[str] = []
-        for policy in policies:
-            policy_id = policy.get("id", "<unknown>")
-            title = policy.get("title") or policy.get("name") or ""
-            category = policy.get("category", "General")
-            severity = policy.get("severity").upper()
-            description = policy.get("description", "").strip()
-            guidance = policy.get("guidance", "").strip()
-
-            rule_header = f"- {policy_id} ({category}, severity={severity})"
-            if title:
-                rule_header += f": {title}"
-
-            lines.append(rule_header)
-            if description:
-                lines.append(f"  Rule: {description}")
-            if guidance:
-                lines.append(f"  Guidance: {guidance}")
-
-        return "\n".join(lines)
-
-    @staticmethod
     def _format_conversation(conversation_history: Sequence[Dict[str, Any]]) -> str:
         """Format conversation history into compact labelled transcript."""
         lines: List[str] = []
@@ -188,7 +156,6 @@ class PolicyJudgeAgent:
             cleaned = cleaned.strip("`")
             if cleaned.lower().startswith("json"):
                 cleaned = cleaned[4:].strip()
-        
+
         parsed = json.loads(cleaned)
-    
         return parsed

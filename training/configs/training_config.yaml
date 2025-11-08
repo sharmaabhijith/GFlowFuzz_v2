@@ -12,7 +12,6 @@ environment:
     config_path: "agents/verifier/config.yaml"
   judge:
     config_path: "agents/judge/config.yaml"
-    policy_set_path: "policies/booking_policies.yaml"
   auditor:
     config_path: "agents/auditor/config.yaml"
 

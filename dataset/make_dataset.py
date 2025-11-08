@@ -47,7 +47,6 @@ def load_resources() -> Dict[str, Path]:
         "user_config": "agents/user/config.yaml",
         "verifier_config": "agents/verifier/config.yaml",
         "judge_config": "agents/judge/config.yaml",
-        "policy_path": "policies/booking_policies.yaml",
     }
 
 
@@ -84,7 +83,6 @@ def detect_non_compliance(
         return 0, ""
 
     result = judge.evaluate(messages, policy_bundle)
-    print("JUDGE RESULT:", result)
     violations = result.violations if isinstance(getattr(result, "violations", None), list) else []
     titles = [str(v.get("policy_title")) for v in violations]
 
@@ -111,25 +109,18 @@ def run_episode(
     non_compliance_flag = 0
 
     attempts += 1
-    print("ATTEMPTS:", attempts)
     if attempts > 3:
         return None
 
     while True:
         
         user_message = user.generate_user_message(chat.conversation_history, objective)
-        chat.conversation_history.append({"role": "user", "content": user_message})
-        print("USER:", user_message)
         normalized_user = user_message.lower()
         if any(q in normalized_user for q in QUIT_WORDS):
             confabulation_flag = detect_confabulation(chat, verifier)
             non_compliance_flag, reasons = detect_non_compliance(judge, policy_bundle, chat.conversation_history)
-            print("CHAT ENDED")
-            print("-" * 30)
             break
         assistant_message = chat.generate_chat_message(user_message)
-        chat.conversation_history.append({"role": "assistant", "content": assistant_message})
-        print("ASSISTANT:", assistant_message)
 
         dialogues += 1
         if dialogues > max_dialogues:
