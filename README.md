@@ -41,9 +41,9 @@ print("\nSummary:\n", agent.generate_booking_summary())
 Example:
 
 ```python
-from agents.user.module import FlightBookingUserAgent
+from agents.user.module import UserAgent
 
-user = FlightBookingUserAgent("agents/user/config.yaml")
+user = UserAgent("agents/user/config.yaml")
 history = [{"role": "assistant", "content": "Where are you flying from and to?"}]
 print(user.generate_user_message(history, "Fly NYC → London in 2026, 1 pax, business"))
 ```

@@ -1,8 +1,8 @@
 import json, itertools
 
-jsonl_path = "dataset/conversations.jsonl"
+jsonl_path = "dataset/data_user-qwen-qwen3-235b-a22b-instruct-2507_chat-qwen-qwen3-235b-a22b-instruct-2507_temp-1.jsonl"
 pretty_path = "dataset/conversations_pretty.json"
-limit = 5
+limit = 10
 
 items = []
 with open(jsonl_path, "r", encoding="utf-8") as f:

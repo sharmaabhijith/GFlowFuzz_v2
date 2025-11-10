@@ -3,16 +3,18 @@
 import json
 import os
 import sys
-import yaml
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from openai import OpenAI
 from dotenv import load_dotenv
+import yaml
 
 # Ensure project modules are importable when this file runs as a script
-sys.path.append(str(Path(__file__).parent.parent.parent))
 sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent))
+
+_DEFAULT_AGENT_CONFIG = Path(__file__).resolve().parent / "agent_config.yaml"
 
 @dataclass
 class UserConfig:
@@ -25,23 +27,37 @@ class UserConfig:
     system_prompt: str
     api_key: str
 
-class FlightBookingUserAgent:
+
+class UserAgent:
     """LLM-backed user agent that produces user utterances from conversation context."""
 
-    def __init__(self, config_path: str, console: Optional[Any] = None):
+    def __init__(self, model_name: Optional[str] = None, temperature: Optional[float] = None):
+        
+        with open(_DEFAULT_AGENT_CONFIG, "r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle)
+        common = config.get("common", {})
+        agent_entry = config.get("agents").get("user")
+        config_data = {**common, **agent_entry}
+        prompt_file = Path(Path(__file__).resolve().parent/agent_entry.get("system_prompt_path"))
+        prompt_text = prompt_file.read_text(encoding="utf-8")
+        config_data["system_prompt"] = prompt_text
+
         """Load configuration and initialise the LLM client."""
-        env_path = os.path.join(Path(__file__).parent.parent.parent, ".env")
+        env_path = os.path.join(Path(__file__).parent.parent, ".env")
         load_dotenv(env_path)
-        # Load configuration
-        with open(config_path, 'r') as f:
-            config_data = yaml.safe_load(f)
+
+        if model_name:
+            config_data["model_name"] = model_name
+        if temperature:
+            config_data["temperature"] = temperature
+
         api_key = os.environ.get('DEEPINFRA_API_KEY')
         self.config = UserConfig(
             api_base_url=config_data['api_base_url'],
             model_name=config_data['model_name'],
-            temperature=config_data.get('temperature', 0.7),
-            max_tokens=config_data.get('max_tokens', 2048),
-            timeout=config_data.get('timeout', 30),
+            temperature=config_data.get('temperature'),
+            max_tokens=config_data.get('max_tokens'),
+            timeout=config_data.get('timeout'),
             system_prompt=config_data.get('system_prompt', ''),
             api_key=api_key
         )

@@ -9,10 +9,10 @@ from dataclasses import dataclass
 sys.path.append(str(Path(__file__).parent.parent))
 sys.path.append(str(Path(__file__).parent.parent / "agents"))
 
-from agents.chat.module import FlightBookingChatAgent
-from agents.verifier.module import BookingVerifierAgent
-from agents.coder.module import SQLCoderAgent
-from agents.judge.module import PolicyJudgeAgent
+from agents.chat import FlightBookingChatAgent
+from agents.verifier import BookingVerifierAgent
+from agents.coder import SQLCoderAgent
+from agents.judge import PolicyJudgeAgent
 
 
 @dataclass
@@ -49,14 +49,10 @@ class BookingConversationEnvironment:
         self.config = config
         self.auditor_config = auditor_config
         self.max_conversation_length = config.get('max_conversation_length', 8)
-        self.booking_agent_config = config.get('booking_agent_config')
-        self.verifier_config = config.get('verifier_config')
-        self.coder_config = config.get('coder_config', {
-            'config_path': 'agents/coder/config.yaml'
-        })
-        self.judge_config = config.get('judge', {
-            'config_path': 'agents/judge/config.yaml',
-        })
+        self.booking_agent_config = config.get('booking_agent_config', {})
+        self.verifier_config = config.get('verifier_config', {})
+        self.coder_config = config.get('coder_config', {})
+        self.judge_config = config.get('judge', {})
 
         self.logger = logging.getLogger(__name__)
         self.booking_agent = None
@@ -73,18 +69,22 @@ class BookingConversationEnvironment:
     def initialize(self):
         """Initialize the environment and agents"""
         # Initialize booking agent
-        chat_config_path = self.booking_agent_config['config_path']
-        db_path = self.booking_agent_config['db_path']
-        server_path = self.booking_agent_config['server_path']
-        self.booking_agent = FlightBookingChatAgent(chat_config_path, db_path, server_path)
+        db_path = self.booking_agent_config.get('db_path', 'database/flights.db')
+        server_path = self.booking_agent_config.get('server_path', 'mcp-server/database_server.py')
+        chat_overrides = self.booking_agent_config.get('overrides')
+        self.booking_agent = FlightBookingChatAgent(
+            db_path=str(db_path),
+            server_path=str(server_path),
+            overrides=chat_overrides,
+        )
         # Initialize verifier agent
-        verifier_config_path = self.verifier_config['config_path']
-        self.verifier_agent = BookingVerifierAgent(verifier_config_path)
+        verifier_overrides = self.verifier_config.get('overrides')
+        self.verifier_agent = BookingVerifierAgent(overrides=verifier_overrides)
         # Initialize coder agent
-        coder_config_path = self.coder_config['config_path']
-        self.coder_agent = SQLCoderAgent(coder_config_path)
-        judge_config_path = self.judge_config.get('config_path')
-        self.judge_agent = PolicyJudgeAgent(judge_config_path)
+        coder_overrides = self.coder_config.get('overrides')
+        self.coder_agent = SQLCoderAgent(overrides=coder_overrides)
+        judge_overrides = self.judge_config.get('overrides')
+        self.judge_agent = PolicyJudgeAgent(overrides=judge_overrides)
         self.is_initialized = True
 
     def reset(self, booking_objective: Optional[str] = None) -> ConversationState:

@@ -1,10 +1,10 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
-from agents.chat.module import FlightBookingChatAgent
-from agents.coder.module import SQLCoderAgent
-from agents.verifier.module import BookingVerifierAgent
-from agents.judge.module import PolicyJudgeAgent
+from agents.chat import FlightBookingChatAgent
+from agents.coder import SQLCoderAgent
+from agents.verifier import BookingVerifierAgent
+from agents.judge import PolicyJudgeAgent
 
 
 class Oracle:

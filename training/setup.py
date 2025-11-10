@@ -5,13 +5,23 @@ import yaml
 from pathlib import Path
 from typing import Dict, Optional, List, Any
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from rich.console import Console
 
 from .environment import BookingConversationEnvironment
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-from agents.auditor.module import AuditorAgent, AuditorConfig
+_AGENT_CONFIG_ENV = "AGENT_CONFIG_PATH"
+_DEFAULT_AGENT_CONFIG = PROJECT_ROOT / "agents" / "agent_config.yaml"
+
+
+@lru_cache(maxsize=None)
+def _load_agent_bundle(config_path: Path) -> Dict[str, Any]:
+    with open(config_path, "r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or {}
+
+from agents.auditor import AuditorAgent, AuditorConfig
 from .trainer.grpo import GRPOAlgorithm
 from .trainer.gflownet import GFlowNetAlgorithm
 
@@ -144,6 +154,11 @@ class TrainingSetup:
         self._trainer: Optional[GRPOAlgorithm | GFlowNetAlgorithm] = None
         self._output_dir: Optional[Path] = None
         self._auditor_config: Optional[Dict[str, Any]] = None
+        env_cfg = self.config.get("environment", {})
+        self.agent_config_path = self.resolve_path(
+            env_cfg.get("agent_config_path", "agents/agent_config.yaml")
+        )
+        os.environ.setdefault("AGENT_CONFIG_PATH", str(self.agent_config_path))
 
     def resolve_path(self, path: Path | str | None, *, default: Path | str | None = None) -> Path:
         """Resolve a config path relative to the project root."""
@@ -155,27 +170,36 @@ class TrainingSetup:
         candidate = Path(path)
         return candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
 
+    def _agent_settings(self, agent_name: str, overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        bundle = _load_agent_bundle(self.agent_config_path)
+        common = bundle.get("common", {})
+        agent_entry = bundle.get("agents", {}).get(agent_name, {})
+        if not agent_entry:
+            raise KeyError(f"Agent '{agent_name}' not defined in {self.agent_config_path}")
+        merged = {**common, **agent_entry}
+        if overrides:
+            merged.update({k: v for k, v in overrides.items() if v is not None})
+
+        prompt_text = merged.get("system_prompt", "")
+        prompt_path = merged.get("system_prompt_path")
+        if prompt_path:
+            prompt_file = Path(prompt_path)
+            if not prompt_file.is_absolute():
+                prompt_file = self.agent_config_path.parent / prompt_path
+            prompt_text = prompt_file.read_text(encoding="utf-8")
+            merged["system_prompt_path"] = str(prompt_file)
+        merged["system_prompt"] = prompt_text
+        return merged
+
     def get_booking_agent_paths(self) -> Dict[str, Path]:
         """Return resolved paths required by the booking chat agent."""
         env_cfg = self.config.get("environment", {})
         booking_cfg = env_cfg.get("booking_agent_config", {})
         return {
-            "config_path": self.resolve_path(booking_cfg.get("config_path"), default="agents/chat/config.yaml"),
             "db_path": self.resolve_path(booking_cfg.get("db_path"), default="database/flights.db"),
             "server_path": self.resolve_path(booking_cfg.get("server_path"), default="mcp-server/database_server.py"),
+            "overrides": booking_cfg.get("overrides", {}),
         }
-
-    def get_verifier_config_path(self) -> Path:
-        """Return the resolved verifier configuration path."""
-        env_cfg = self.config.get("environment", {})
-        verifier_cfg = env_cfg.get("verifier_config", {})
-        return self.resolve_path(verifier_cfg.get("config_path"), default="agents/verifier/config.yaml")
-
-    def get_user_agent_config_path(self) -> Path:
-        """Return the resolved user agent configuration path."""
-        env_cfg = self.config.get("environment", {})
-        user_cfg_path = env_cfg.get("user_agent_config_path", "agents/user/config.yaml")
-        return self.resolve_path(user_cfg_path)
 
     def ensure_database(self) -> Path:
         """Ensure the flights database directory exists and return its path."""
@@ -219,11 +243,13 @@ class TrainingSetup:
 
     def policy(self) -> AuditorAgent:
         if self._policy is None:
-            cfg_path = self.config["environment"]["auditor"]["config_path"]
-            auditor_cfg = load_config(str(cfg_path))
+            env_cfg = self.config.get("environment", {})
+            auditor_section = env_cfg.get("auditor", {})
+            auditor_overrides = auditor_section.get("overrides")
+            auditor_cfg = self._agent_settings("auditor", overrides=auditor_overrides)
             policy_cfg = AuditorConfig(
                 model_name=auditor_cfg["model_name"],
-                max_length=auditor_cfg["max_response_length"],
+                max_length=auditor_cfg.get("max_response_length", auditor_cfg.get("max_length", 32)),
                 temperature=auditor_cfg.get("temperature", 0.7),
                 top_p=auditor_cfg.get("top_p", 0.9),
                 do_sample=auditor_cfg.get("do_sample", True),

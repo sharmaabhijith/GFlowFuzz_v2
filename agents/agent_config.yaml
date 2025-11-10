@@ -1,0 +1,49 @@
+common:
+  api_base_url: "https://api.deepinfra.com/v1/openai"
+  timeout: 30
+
+agents:
+  user:
+    model_name: "Qwen/Qwen3-235B-A22B-Instruct-2507"
+    temperature: 0.1
+    max_tokens: 4096
+    top_p: 0.9
+    system_prompt_path: "system_prompts/user.txt"
+
+  chat:
+    max_retries: 3
+    model_name: "Qwen/Qwen3-235B-A22B-Instruct-2507"
+    temperature: 0.3
+    max_tokens: 4096
+    top_p: 0.9
+    system_prompt_path: "system_prompts/chat.txt"
+
+  coder:
+    max_retries: 3
+    model_name: "Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo"
+    temperature: 0.1
+    max_tokens: 2048
+    top_p: 0.9
+    system_prompt_path: "system_prompts/coder.txt"
+
+  verifier:
+    max_retries: 3
+    model_name: "Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo"
+    temperature: 0.0
+    max_tokens: 2048
+    system_prompt_path: "system_prompts/verifier.txt"
+
+  judge:
+    max_retries: 3
+    model_name: "Qwen/Qwen3-235B-A22B-Instruct-2507"
+    temperature: 0.1
+    max_tokens: 1200
+    system_prompt_path: "system_prompts/judge.txt"
+
+  auditor:
+    model_name: "Qwen/Qwen3-1B"
+    max_response_length: 30
+    temperature: 0.7
+    top_p: 0.9
+    do_sample: true
+    system_prompt_path: "system_prompts/auditor.txt"

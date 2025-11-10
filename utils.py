@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from functools import lru_cache
 
 from rich import box
 from rich.console import Console
@@ -13,6 +15,37 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.logging import RichHandler
+import yaml
+
+_AGENT_CONFIG_ENV = "AGENT_CONFIG_PATH"
+_DEFAULT_AGENT_CONFIG = Path(__file__).resolve().parent / "agents" / "agent_config.yaml"
+
+
+@lru_cache(maxsize=None)
+def _load_agent_bundle() -> tuple[Path, Dict[str, Any]]:
+    bundle_path = os.environ.get(_AGENT_CONFIG_ENV)
+    config_path = Path(bundle_path) if bundle_path else _DEFAULT_AGENT_CONFIG
+    if not config_path.is_absolute():
+        config_path = _DEFAULT_AGENT_CONFIG.parent / config_path
+    with open(config_path, "r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    return config_path, data
+
+
+def _agent_settings(agent_name: str) -> Dict[str, Any]:
+    config_path, bundle = _load_agent_bundle()
+    common = bundle.get("common", {})
+    agent_entry = bundle.get("agents", {}).get(agent_name, {})
+    if not agent_entry:
+        raise KeyError(f"Agent '{agent_name}' not defined in {config_path}")
+    merged = {**common, **agent_entry}
+    prompt_path = merged.get("system_prompt_path")
+    if prompt_path:
+        prompt_file = Path(prompt_path)
+        if not prompt_file.is_absolute():
+            prompt_file = config_path.parent / prompt_path
+        merged["system_prompt_path"] = str(prompt_file)
+    return merged
 
 class BookingObjectiveGenerator:
     """Generate booking objectives using cities drawn from the flights database."""
@@ -132,10 +165,11 @@ class ConsoleReporter:
         table.add_column("Parameter", style="cyan")
         table.add_column("Value", style="green")
         table.add_row("Algorithm", algorithm_name.upper())
-        cfg_path = config["environment"]["auditor"]["config_path"]
-        from training.setup import load_config  # Lazy import to avoid cycles
-
-        auditor_cfg = load_config(str(cfg_path))
+        env_cfg = config.get("environment", {})
+        auditor_overrides = env_cfg.get("auditor", {}).get("overrides")
+        auditor_cfg = _agent_settings("auditor")
+        if auditor_overrides:
+            auditor_cfg.update({k: v for k, v in auditor_overrides.items() if v is not None})
         table.add_row("Auditor Model", auditor_cfg.get("model_name", "<unknown>"))
         table.add_row("Learning Rate", str(algo_config.get("learning_rate")))
         table.add_row("Batch Size", str(algo_config.get("batch_size")))

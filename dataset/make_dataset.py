@@ -3,14 +3,13 @@
 
 from __future__ import annotations
 
-import os
+import re
 import argparse
 import json
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
-import yaml
 import sys
 
 # Ensure the project root is on sys.path so `agents/...` imports work
@@ -18,20 +17,14 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from agents.chat.module import FlightBookingChatAgent
-from agents.user.module import FlightBookingUserAgent
-from agents.verifier.module import BookingVerifierAgent
-from agents.judge.module import PolicyJudgeAgent
+from agents.chat import FlightBookingChatAgent
+from agents.user import UserAgent
+from agents.verifier import BookingVerifierAgent
+from agents.judge import PolicyJudgeAgent
 from utils import BookingObjectiveGenerator
 
 
-DEFAULT_CONFIG = os.path.join(_PROJECT_ROOT, "training", "configs", "training_config.yaml")
 QUIT_WORDS = {"quit", "exit", "bye", "goodbye"}
-
-
-def load_yaml(path: Path) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
     
 def fmt_secs(sec: float) -> str:
         sec = max(0, int(sec))
@@ -41,16 +34,33 @@ def fmt_secs(sec: float) -> str:
 
 def load_resources() -> Dict[str, Path]:
     return {
-        "chat_config": "agents/chat/config.yaml",
-        "db_path": "database/flights.db",
-        "server_path": "mcp-server/database_server.py",
-        "user_config": "agents/user/config.yaml",
-        "verifier_config": "agents/verifier/config.yaml",
-        "judge_config": "agents/judge/config.yaml",
+        "db_path": Path("database/flights.db"),
+        "server_path": Path("mcp-server/database_server.py"),
     }
 
 
-def reset_agents(chat: FlightBookingChatAgent, user: FlightBookingUserAgent, objective: str) -> None:
+def sanitize_for_filename(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9]+", "-", value.strip())
+    sanitized = sanitized.strip("-").lower()
+    return sanitized or "na"
+
+
+def _config_value(cfg: Any, key: str, default: Any = None) -> Any:
+    if isinstance(cfg, dict):
+        return cfg.get(key, default)
+    return getattr(cfg, key, default)
+
+
+def computed_dataset_path(user_cfg: Any, chat_cfg: Any) -> Path:
+    user_model = sanitize_for_filename(str(_config_value(user_cfg, "model_name", "user")))
+    chat_model = sanitize_for_filename(str(_config_value(chat_cfg, "model_name", "chat")))
+    temperature = float(_config_value(user_cfg, "temperature"))
+    temp_suffix = int(round(temperature * 10))
+    filename = f"data_user-{user_model}_chat-{chat_model}_temp-{temp_suffix}.jsonl"
+    return Path("dataset") / filename
+
+
+def reset_agents(chat: FlightBookingChatAgent, user: UserAgent, objective: str) -> None:
     chat.conversation_history = []
     chat.booking_context = {
         "summary": "",
@@ -92,7 +102,7 @@ def detect_non_compliance(
 
 def run_episode(
     objective: str,
-    user: FlightBookingUserAgent,
+    user: UserAgent,
     chat: FlightBookingChatAgent,
     verifier: BookingVerifierAgent,
     judge: Optional[PolicyJudgeAgent],
@@ -142,25 +152,28 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--episodes", type=int, default=100)
-    parser.add_argument("--out", type=str, default="dataset/conversations.jsonl")
+    parser.add_argument("--out", type=str, default=None, help="Optional explicit output path.")
     parser.add_argument("--max_dialogues", type=int, default=30)
     parser.add_argument("--log_every", type=int, default=1, help="Print progress every N episodes")
+    parser.add_argument("--user-model", type=str, default=None, help="Override user agent model name.")
+    parser.add_argument("--user-temperature", type=float, default=None, help="Override user agent temperature.")
+    parser.add_argument("--chat-model", type=str, default=None, help="Override chat agent model name.")
     args = parser.parse_args()
     resources = load_resources()
     objective_generator = BookingObjectiveGenerator(db_path=resources["db_path"])
     max_diag = args.max_dialogues
 
     chat = FlightBookingChatAgent(
-        config_path=str(resources["chat_config"]),
-        db_path=str(resources["db_path"]),
+        db_path=str(resources["db_path"]), 
         server_path=str(resources["server_path"]),
-    )
+        model_name=args.chat_model,
+        )
 
-    user = FlightBookingUserAgent(str(resources["user_config"]))
-    verifier = BookingVerifierAgent(str(resources["verifier_config"]))
-    judge = PolicyJudgeAgent(str(resources["judge_config"]))
+    user = UserAgent(model_name=args.user_model, temperature=args.user_temperature)
+    verifier = BookingVerifierAgent()
+    judge = PolicyJudgeAgent()
 
-    output_path = Path(args.out)
+    output_path = Path(args.out) if args.out else computed_dataset_path(user.config, chat.config)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(

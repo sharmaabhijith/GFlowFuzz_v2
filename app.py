@@ -33,8 +33,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from training.setup import TrainingSetup, load_config
 from utils import BookingObjectiveGenerator, ConsoleReporter
-from agents.chat.module import FlightBookingChatAgent
-from agents.user.module import FlightBookingUserAgent
+from agents.chat import FlightBookingChatAgent
+from agents.user import UserAgent
 from utils import ConsoleReporter
 
 # Custom theme for professional look
@@ -71,9 +71,7 @@ class FlightBookingApp:
         self.setup.configure_hf_caches()
         self.agent_resources = self.setup.get_booking_agent_paths()
         self.database_path = self.setup.ensure_database()
-        self.chat_config_path = self.agent_resources["config_path"]
         self.server_path = self.agent_resources["server_path"]
-        self.user_config_path = self.setup.get_user_agent_config_path()
 
         self.objective_generator = BookingObjectiveGenerator(
             db_path=self.agent_resources["db_path"],
@@ -222,10 +220,8 @@ class FlightBookingApp:
         try:
             resources = self.setup.get_booking_agent_paths()
             self.agent_resources = resources
-            self.chat_config_path = resources["config_path"]
             self.server_path = resources["server_path"]
             self.database_path = self.setup.ensure_database()
-            self.user_config_path = self.setup.get_user_agent_config_path()
             return True
         except Exception as exc:
             self.console.print(f"[warning]Failed to resolve resources: {exc}[/warning]")
@@ -270,7 +266,6 @@ class FlightBookingApp:
         # Initialize chat agent with loading animation
         with self.console.status("[bold cyan]Initializing AI assistant...[/bold cyan]", spinner="dots12"):
             agent = FlightBookingChatAgent(
-                config_path=str(self.chat_config_path),
                 db_path=str(self.database_path),
                 server_path=str(self.server_path)
             )
@@ -529,15 +524,11 @@ class FlightBookingApp:
             task = progress.add_task("[cyan]Setting up agents...", total=2)
             
             # Initialize user agent
-            user_agent = FlightBookingUserAgent(
-                config_path=str(self.user_config_path),
-                console=self.console
-            )
+            user_agent = UserAgent(console=self.console)
             progress.advance(task)
             
             # Initialize chat agent
             chat_agent = FlightBookingChatAgent(
-                config_path=str(self.chat_config_path),
                 db_path=str(self.database_path),
                 server_path=str(self.server_path)
             )
@@ -577,7 +568,7 @@ class FlightBookingApp:
 
     def _simulate_booking_conversation(
         self,
-        user_agent: FlightBookingUserAgent,
+        user_agent: UserAgent,
         chat_agent: FlightBookingChatAgent,
         objective: Optional[str] = None,
     ) -> Dict[str, Any]:

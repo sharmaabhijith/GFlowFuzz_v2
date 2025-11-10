@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 
 import os
-import sys
 import json
-import re
-from pathlib import Path
 import yaml
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 from dotenv import load_dotenv
 from openai import OpenAI
-from datetime import datetime
-from agents.coder.module import SQLCoderAgent
+from agents.coder import SQLCoderAgent
+
+_DEFAULT_AGENT_CONFIG = Path(__file__).resolve().parent / "agent_config.yaml"
+
 
 @dataclass
 class VerifierConfig:
@@ -36,14 +36,21 @@ class BookingVerifierAgent:
     """
     Verifier Agent that validates booking claims made during conversations
     """
-    def __init__(self, config_path: str):
-        env_path = os.path.join(Path(__file__).parent.parent.parent, ".env")
+    def __init__(self):
+        
+        with open(_DEFAULT_AGENT_CONFIG, "r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle)
+        common = config.get("common", {})
+        agent_entry = config.get("agents").get("verifier")
+        config_data = {**common, **agent_entry}
+        prompt_file = Path(Path(__file__).resolve().parent/agent_entry.get("system_prompt_path"))
+        prompt_text = prompt_file.read_text(encoding="utf-8")
+        config_data["system_prompt"] = prompt_text
+
+        env_path = os.path.join(Path(__file__).parent.parent, ".env")
         load_dotenv(env_path)
         api_key = os.environ.get('DEEPINFRA_API_KEY')
-        
-        with open(config_path, 'r') as f:
-            config_data = yaml.safe_load(f)
-        
+
         self.config = VerifierConfig(
             api_base_url=config_data['api_base_url'],
             model_name=config_data['model_name'],
@@ -60,9 +67,7 @@ class BookingVerifierAgent:
             base_url=self.config.api_base_url
         )
 
-        self.coder_agent = SQLCoderAgent(
-            os.path.join(Path(__file__).parent.parent, 'coder', 'config.yaml')
-        )
+        self.coder_agent = SQLCoderAgent()
         
     
     def _call_llm(self, messages: List[Dict[str, str]]) -> str:

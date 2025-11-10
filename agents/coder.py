@@ -3,12 +3,14 @@
 import os
 import sys
 from pathlib import Path
-import yaml
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from dotenv import load_dotenv
 from openai import OpenAI
 import re
+import yaml
+
+_DEFAULT_AGENT_CONFIG = Path(__file__).resolve().parent / "agent_config.yaml"
 
 @dataclass
 class CoderConfig:
@@ -21,16 +23,26 @@ class CoderConfig:
     system_prompt: str
     api_key: str
 
+
 class SQLCoderAgent:
     """
     SQL Coder Agent that converts natural language flight requests into SQL queries
     """
-    def __init__(self, config_path: str):
-        env_path = os.path.join(Path(__file__).parent.parent.parent, ".env")
+    def __init__(self):
+
+        with open(_DEFAULT_AGENT_CONFIG, "r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle)
+        common = config.get("common", {})
+        agent_entry = config.get("agents").get("coder")
+        config_data = {**common, **agent_entry}
+        prompt_file = Path(Path(__file__).resolve().parent/agent_entry.get("system_prompt_path"))
+        prompt_text = prompt_file.read_text(encoding="utf-8")
+        config_data["system_prompt"] = prompt_text
+
+        env_path = os.path.join(Path(__file__).parent.parent, ".env")
         load_dotenv(env_path)
         api_key = os.environ.get('DEEPINFRA_API_KEY')
-        with open(config_path, 'r') as f:
-            config_data = yaml.safe_load(f)
+
         self.config = CoderConfig(
             api_base_url=config_data['api_base_url'],
             model_name=config_data['model_name'],

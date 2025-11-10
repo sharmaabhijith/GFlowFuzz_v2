@@ -15,12 +15,13 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
-
-import yaml
 from dotenv import load_dotenv
 from openai import OpenAI
+import yaml
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_AGENT_CONFIG = Path(__file__).resolve().parent / "agent_config.yaml"
 
 
 @dataclass
@@ -48,13 +49,20 @@ class PolicyJudgeResult:
 class PolicyJudgeAgent:
     """LLM-backed policy compliance evaluator."""
 
-    def __init__(self, config_path: str):
+    def __init__(self):
         env_path = Path(__file__).resolve().parent.parent.parent / ".env"
         load_dotenv(env_path)
         api_key = os.environ.get("DEEPINFRA_API_KEY")
 
-        with open(config_path, "r", encoding="utf-8") as config_file:
-            config_data = yaml.safe_load(config_file)
+        with open(_DEFAULT_AGENT_CONFIG, "r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle)
+        common = config.get("common", {})
+        agent_entry = config.get("agents").get("judge")
+        config_data = {**common, **agent_entry}
+        prompt_file = Path(Path(__file__).resolve().parent/agent_entry.get("system_prompt_path"))
+        prompt_text = prompt_file.read_text(encoding="utf-8")
+        config_data["system_prompt"] = prompt_text
+
         self.config = PolicyJudgeConfig(
             api_base_url=config_data["api_base_url"],
             model_name=config_data["model_name"],

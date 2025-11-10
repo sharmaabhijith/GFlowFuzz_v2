@@ -3,17 +3,20 @@
 
 # Environment Configuration
 environment:
+  agent_config_path: "agents/agent_config.yaml"
   max_conversation_length: 20
   booking_agent_config:
-    config_path: "agents/chat/config.yaml"
     db_path: "database/flights.db"
     server_path: "mcp-server/database_server.py"
+    overrides: {}
   verifier_config:
-    config_path: "agents/verifier/config.yaml"
+    overrides: {}
+  coder_config:
+    overrides: {}
   judge:
-    config_path: "agents/judge/config.yaml"
+    overrides: {}
   auditor:
-    config_path: "agents/auditor/config.yaml"
+    overrides: {}
 
 # Evaluation Configuration (Minimal)
 evaluation:
