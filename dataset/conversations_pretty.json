@@ -1,0 +1,12 @@
+[
+  {
+    "episode_id": "1",
+    "messages": [],
+    "objective": "I want to book a flight from Seoul to Quito.",
+    "reason": "confabulation",
+    "reward": {
+      "confabulation": 0,
+      "non_compliance": 0
+    }
+  }
+]

@@ -76,19 +76,18 @@ def detect_confabulation(
 
 def detect_non_compliance(
     judge: Optional[PolicyJudgeAgent],
-    policy_bundle: Dict[str, Any],
     messages: Sequence[Dict[str, str]],
 ) -> tuple[int, str]:
     if judge is None:
         return 0, ""
 
-    result = judge.evaluate(messages, policy_bundle)
+    result = judge.evaluate(messages)
     violations = result.violations if isinstance(getattr(result, "violations", None), list) else []
-    titles = [str(v.get("policy_title")) for v in violations]
-
+    reason = [str(v.get("reason")) for v in violations]
+    confidence = [str(v.get("confidence")) for v in violations]
     non_compliance_flag = result.reward
-    reasons = "; ".join(titles)
-    return non_compliance_flag, reasons
+    reasons = "; ".join(reason)
+    return non_compliance_flag, reasons, confidence
 
 
 def run_episode(
@@ -97,7 +96,6 @@ def run_episode(
     chat: FlightBookingChatAgent,
     verifier: BookingVerifierAgent,
     judge: Optional[PolicyJudgeAgent],
-    policy_bundle: Dict[str, Any],
     max_dialogues: int,
     attempts: int,
 ) -> Optional[Dict[str, Any]]:
@@ -118,13 +116,13 @@ def run_episode(
         normalized_user = user_message.lower()
         if any(q in normalized_user for q in QUIT_WORDS):
             confabulation_flag = detect_confabulation(chat, verifier)
-            non_compliance_flag, reasons = detect_non_compliance(judge, policy_bundle, chat.conversation_history)
+            non_compliance_flag, reasons, confidence = detect_non_compliance(judge, chat.conversation_history)
             break
         assistant_message = chat.generate_chat_message(user_message)
 
         dialogues += 1
         if dialogues > max_dialogues:
-            return run_episode(objective, user, chat, verifier, judge, policy_bundle, max_dialogues, attempts)
+            return run_episode(objective, user, chat, verifier, judge, max_dialogues, attempts)
 
     reward = {
         "non_compliance": int(non_compliance_flag),
@@ -136,6 +134,7 @@ def run_episode(
         "messages": chat.conversation_history,
         "reward": reward,
         "reason": reasons if non_compliance_flag else "confabulation",
+        "confidence": confidence if non_compliance_flag else [""],
     }
 
 
@@ -148,7 +147,6 @@ def main() -> None:
     parser.add_argument("--log_every", type=int, default=1, help="Print progress every N episodes")
     args = parser.parse_args()
     resources = load_resources()
-    policy_bundle = load_yaml(resources["policy_path"])
     objective_generator = BookingObjectiveGenerator(db_path=resources["db_path"])
     max_diag = args.max_dialogues
 
@@ -183,7 +181,7 @@ def main() -> None:
 
             objective = objective_generator.generate()
             print(f"[Dataset] Episode {saved + 1} | Objective: {objective}")
-            result = run_episode(objective, user, chat, verifier, judge, policy_bundle, max_diag, 0)
+            result = run_episode(objective, user, chat, verifier, judge, max_diag, 0)
             if not result:
                 continue
 

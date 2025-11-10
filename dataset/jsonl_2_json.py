@@ -1,6 +1,6 @@
 import json, itertools
 
-jsonl_path = "dataset/conversations_v0.jsonl"
+jsonl_path = "dataset/conversations.jsonl"
 pretty_path = "dataset/conversations_pretty.json"
 limit = 5
 

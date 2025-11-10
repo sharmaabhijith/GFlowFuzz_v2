@@ -43,8 +43,6 @@ class PolicyJudgeResult:
 
     reward: float
     violations: List[Dict[str, Any]]
-    raw_response: Optional[str] = None
-    error: Optional[str] = None
 
 
 class PolicyJudgeAgent:
@@ -120,7 +118,6 @@ class PolicyJudgeAgent:
         return PolicyJudgeResult(
             reward=1.0 if reward >= 1 else 0.0,
             violations=violations if isinstance(violations, list) else [],
-            raw_response=llm_response.strip(),
         )
 
     def _call_llm(self, messages: List[Dict[str, str]]) -> str:
