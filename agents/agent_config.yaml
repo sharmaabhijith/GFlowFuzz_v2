@@ -41,7 +41,7 @@ agents:
     system_prompt_path: "system_prompts/judge.txt"
 
   auditor:
-    model_name: "Qwen/Qwen3-1B"
+    model_name: "Qwen/Qwen3-4B-Instruct-2507"
     max_response_length: 30
     temperature: 0.7
     top_p: 0.9

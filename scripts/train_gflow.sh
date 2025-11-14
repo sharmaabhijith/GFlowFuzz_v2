@@ -2,12 +2,12 @@
 #SBATCH -J gflownet_train
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=1
 #SBATCH --gres=gpu:mi210:8
 #SBATCH --partition=faculty
 #SBATCH --qos=gtqos
 #SBATCH --mem=256G
-#SBATCH -t 12:00:00
+#SBATCH -t 24:00:00
 #SBATCH -o logs/gflownet_%j.out
 #SBATCH -e logs/gflownet_%j.err
 
