@@ -39,7 +39,7 @@ class SQLCoderAgent:
         prompt_text = prompt_file.read_text(encoding="utf-8")
         config_data["system_prompt"] = prompt_text
 
-        env_path = os.path.join(Path(__file__).parent.parent, ".env")
+        env_path = os.path.join(Path(__file__).parent.parent.parent, ".env")
         load_dotenv(env_path)
         api_key = os.environ.get('DEEPINFRA_API_KEY')
 

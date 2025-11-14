@@ -121,7 +121,6 @@ def run_episode(
         return None
 
     while True:
-        
         user_message = user.generate_user_message(chat.conversation_history, objective)
         normalized_user = user_message.lower()
         if any(q in normalized_user for q in QUIT_WORDS):
@@ -139,11 +138,21 @@ def run_episode(
         "confabulation": int(confabulation_flag),
     }
 
+    if non_compliance_flag and confabulation_flag:
+        reasons = reasons + "; " + "confabulation detected"
+    elif non_compliance_flag and non_compliance_flag:
+        reasons = reasons
+    elif confabulation_flag and not non_compliance_flag:
+        reasons = "confabulation detected"
+    else:
+        reasons = ""
+    
+
     return {
         "objective": objective,
         "messages": chat.conversation_history,
         "reward": reward,
-        "reason": reasons if non_compliance_flag else "confabulation",
+        "reason": reasons,
         "confidence": confidence if non_compliance_flag else [""],
     }
 
@@ -152,12 +161,11 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--episodes", type=int, default=100)
-    parser.add_argument("--out", type=str, default=None, help="Optional explicit output path.")
     parser.add_argument("--max_dialogues", type=int, default=30)
-    parser.add_argument("--log_every", type=int, default=1, help="Print progress every N episodes")
     parser.add_argument("--user-model", type=str, default=None, help="Override user agent model name.")
     parser.add_argument("--user-temperature", type=float, default=None, help="Override user agent temperature.")
     parser.add_argument("--chat-model", type=str, default=None, help="Override chat agent model name.")
+
     args = parser.parse_args()
     resources = load_resources()
     objective_generator = BookingObjectiveGenerator(db_path=resources["db_path"])
@@ -173,13 +181,13 @@ def main() -> None:
     verifier = BookingVerifierAgent()
     judge = PolicyJudgeAgent()
 
-    output_path = Path(args.out) if args.out else computed_dataset_path(user.config, chat.config)
+    output_path = computed_dataset_path(user.config, chat.config)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(
         (
             f"[Dataset] Start | episodes={args.episodes} | out={output_path} | "
-            f"max_dialogues={args.max_dialogues} | log_every={args.log_every}"
+            f"max_dialogues={args.max_dialogues}"
         )
     )
 
@@ -191,27 +199,26 @@ def main() -> None:
 
     with output_path.open("a", encoding="utf-8") as handle:
         while saved < args.episodes:
+            try:
+                objective = objective_generator.generate()
+                print(f"[Dataset] Episode {saved + 1} | Objective: {objective}")
+                result = run_episode(objective, user, chat, verifier, judge, max_diag, 0)
+                if not result:
+                    continue
 
-            objective = objective_generator.generate()
-            print(f"[Dataset] Episode {saved + 1} | Objective: {objective}")
-            result = run_episode(objective, user, chat, verifier, judge, max_diag, 0)
-            if not result:
-                continue
+                episode = {
+                    "episode_id": str(saved + 1),
+                    "objective": result["objective"],
+                    "messages": result["messages"],
+                    "reward": result["reward"],
+                    "reason": result["reason"],
+                }
 
-            episode = {
-                "episode_id": str(saved + 1),
-                "objective": result["objective"],
-                "messages": result["messages"],
-                "reward": result["reward"],
-                "reason": result["reason"],
-            }
+                handle.write(json.dumps(episode, ensure_ascii=False) + "\n")
+                saved += 1
+                total_confab += int(episode["reward"].get("confabulation", 0))
+                total_noncompliance += int(episode["reward"].get("non_compliance", 0))
 
-            handle.write(json.dumps(episode, ensure_ascii=False) + "\n")
-            saved += 1
-            total_confab += int(episode["reward"].get("confabulation", 0))
-            total_noncompliance += int(episode["reward"].get("non_compliance", 0))
-
-            if saved % args.log_every == 0 or saved == args.episodes:
                 elapsed = time.time() - start_ts
                 eps_rate = saved / elapsed if elapsed > 0 else 0.0
                 remaining = args.episodes - saved
@@ -224,6 +231,8 @@ def main() -> None:
                         f"elapsed={fmt_secs(elapsed)} | eta={fmt_secs(eta)}"
                     )
                 )
+            except Exception as e:
+                continue
 
 
 if __name__ == "__main__":

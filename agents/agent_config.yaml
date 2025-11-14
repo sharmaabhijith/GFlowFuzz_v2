@@ -6,7 +6,7 @@ agents:
   user:
     model_name: "Qwen/Qwen3-235B-A22B-Instruct-2507"
     temperature: 0.1
-    max_tokens: 4096
+    max_tokens: 512
     top_p: 0.9
     system_prompt_path: "system_prompts/user.txt"
 
@@ -37,7 +37,7 @@ agents:
     max_retries: 3
     model_name: "Qwen/Qwen3-235B-A22B-Instruct-2507"
     temperature: 0.1
-    max_tokens: 1200
+    max_tokens: 4096
     system_prompt_path: "system_prompts/judge.txt"
 
   auditor:

@@ -139,7 +139,7 @@ class FlightBookingChatAgent:
         """
         
         messages = [
-            {"role": "system", "content": "You are a booking information extractor. Extract and maintain booking context from user messages."},
+            {"role": "system", "content": "You are a booking information extractor. Extract and maintain booking context as JSON from user messages."},
             {"role": "user", "content": extraction_prompt}
         ]
         # Add recent conversation for context
@@ -148,9 +148,10 @@ class FlightBookingChatAgent:
             for msg in self.conversation_history[-5:]:
                 recent_context += f"{msg['role']}: {msg['content']}\n"
             messages[0]["content"] += "\n\n" + recent_context
+        
         response = self._call_llm(messages)
-        # Try to parse the response as JSON
         updated_context = json.loads(response)
+
         # Merge with existing context
         if "summary" in updated_context:
             self.booking_context["summary"] = updated_context["summary"]

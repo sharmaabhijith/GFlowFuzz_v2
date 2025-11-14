@@ -12,3 +12,6 @@ __pycache__/
 .idea/
 .claude/
 .db
+raw_data_per_user_per_temp/
+raw_data_per_user/
+raw_data

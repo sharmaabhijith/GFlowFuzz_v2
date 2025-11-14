@@ -43,7 +43,7 @@ class UserAgent:
         config_data["system_prompt"] = prompt_text
 
         """Load configuration and initialise the LLM client."""
-        env_path = os.path.join(Path(__file__).parent.parent, ".env")
+        env_path = os.path.join(Path(__file__).parent.parent.parent, ".env")
         load_dotenv(env_path)
 
         if model_name:
