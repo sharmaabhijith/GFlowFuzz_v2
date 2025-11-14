@@ -4,6 +4,11 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from peft import LoraConfig
 from trl import SFTTrainer, SFTConfig
 
+import os
+import wandb
+from dotenv import load_dotenv
+load_dotenv(".env")
+
 def guess_lora_targets(model_name: str):
     name = model_name.lower()
     if any(k in name for k in ["llama", "mistral", "gemma", "phi"]):
@@ -26,7 +31,31 @@ def main():
     ap.add_argument("--lora_r", type=int, default=32)
     ap.add_argument("--lora_alpha", type=int, default=32)
     ap.add_argument("--lora_dropout", type=float, default=0.05)
+        # wandb
+    ap.add_argument("--wandb_entity", default="ashar_wandb")
+    ap.add_argument("--wandb_project", default="sft-user-sim")
+    ap.add_argument("--wandb_name", default="qwen4b_sft_run")
+    ap.add_argument("--wandb_tags", nargs="*", default=None)
     args = ap.parse_args()
+
+    # ---- Start W&B ----
+    run = wandb.init(
+        entity=args.wandb_entity,
+        project=args.wandb_project,
+        name=args.wandb_name,
+        config={
+            "model": args.model,
+            "data": args.data,
+            "seq": args.seq,
+            "batch": args.batch,
+            "accum": args.accum,
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "lora_r": args.lora_r,
+            "lora_alpha": args.lora_alpha,
+            "lora_dropout": args.lora_dropout,
+        },
+    )
 
     # ---- Dataset ----
     ds = load_dataset("json", data_files={"train": args.data})["train"]
@@ -122,9 +151,15 @@ def main():
         ),
     )
 
+    total = sum(p.numel() for p in model.parameters())
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    wandb.log({"params/total": total, "params/trainable": trainable})
+
     trainer.train()
     trainer.save_model(args.out)
     tok.save_pretrained(args.out)
+
+    run.finish()
 
 if __name__ == "__main__":
     main()
