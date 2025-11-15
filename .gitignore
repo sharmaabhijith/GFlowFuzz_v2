@@ -1,4 +1,5 @@
 myenv/
+hyperenv/
 .env
 database/
 __pycache__/
@@ -15,4 +16,7 @@ __pycache__/
 raw_data_per_user_per_temp/
 raw_data_per_user/
 raw_data/
+cleaned_data/
+$HF_HOME/
+$HOME/
 cleaned_data/
