@@ -7,7 +7,7 @@ Usage:
   python train.py \
       --data dataset/cleaned_data/final_data_os_3.jsonl \
       --model Qwen/Qwen3-4B-Instruct-2507 \
-      --seq 4096 --batch 1 --accum 16 --epochs 2
+      --seq 4096 --batch 1 --accum 16 --epochs 2.0
 """
 
 import argparse
@@ -23,7 +23,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, get_peft_model
 
 import wandb
 from dotenv import load_dotenv
@@ -153,10 +153,10 @@ class LastUserSpanCollator:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="dataset/cleaned_data/final_data_os_3.jsonl")
-    ap.add_argument("--model", default="Qwen/Qwen3-8B")
-    ap.add_argument("--out", default="SFT/trained_models")
-    ap.add_argument("--seq", type=int, default=2048)
+    ap.add_argument("--data", default="dataset/cleaned_data/final_data_os_1.jsonl")
+    ap.add_argument("--model", default="Qwen/Qwen3-4B-Instruct-2507")
+    ap.add_argument("--out", default="SFT/trained_models/qwen3-4b-os1-epoch")
+    ap.add_argument("--seq", type=int, default=1024)
     ap.add_argument("--batch", type=int, default=1)
     ap.add_argument("--accum", type=int, default=16)
     ap.add_argument("--epochs", type=float, default=2.0)
@@ -169,6 +169,10 @@ def main():
     ap.add_argument("--wandb_name", default="qwen4b_user_lastspan")
     args = ap.parse_args()
 
+    # BF16/FP16 selection
+    use_bf16 = torch.cuda.is_available() and getattr(torch.cuda, "is_bf16_supported", lambda: False)()
+    torch_dtype = torch.bfloat16 if use_bf16 else torch.float16
+
     # W&B
     run = wandb.init(
         entity=args.wandb_entity,
@@ -178,7 +182,7 @@ def main():
     )
 
     print(f"\n{'='*60}")
-    print(f"Training Configuration:")
+    print(f"Training Configuration (epoch-based):")
     print(f"{'='*60}")
     print(f"Model: {args.model}")
     print(f"Data: {args.data}")
@@ -191,7 +195,6 @@ def main():
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     tok.padding_side = "right"
-
     print(f"Tokenizer loaded: {tok.__class__.__name__}\n")
 
     # Dataset
@@ -213,14 +216,13 @@ def main():
         args.model,
         device_map="auto",
         trust_remote_code=True,
-        torch_dtype=torch.float16,
+        torch_dtype=torch_dtype,
     )
 
     model.config.use_cache = False
     if getattr(model.config, "pad_token_id", None) is None:
         model.config.pad_token_id = tok.pad_token_id
-
-    print(f"Model loaded\n")
+    print("Model loaded\n")
 
     # Enable gradient checkpointing
     model.gradient_checkpointing_enable()
@@ -233,9 +235,8 @@ def main():
         lora_dropout=args.lora_dropout,
         bias="none",
         task_type="CAUSAL_LM",
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        target_modules=["q_proj", "v_proj"],  
     )
-
     model = get_peft_model(model, peft_cfg)
     model.print_trainable_parameters()
 
@@ -252,22 +253,22 @@ def main():
         max_length=args.seq,
     )
 
-    # Training args
+    # Training args (epoch-based)
     training_args = TrainingArguments(
         output_dir=args.out,
         per_device_train_batch_size=args.batch,
         per_device_eval_batch_size=args.batch,
         gradient_accumulation_steps=args.accum,
-        num_train_epochs=args.epochs,
         learning_rate=args.lr,
-        fp16=True,
+        num_train_epochs=args.epochs,
+        bf16=use_bf16,
+        fp16=not use_bf16,
         optim="adamw_torch",
         lr_scheduler_type="cosine",
-        warmup_ratio=0.05,
+        warmup_ratio=0.06,
         logging_steps=20,
-        eval_strategy="steps",
-        eval_steps=500,
-        save_steps=500,
+        eval_strategy="epoch",
+        save_strategy="epoch",
         save_total_limit=3,
         report_to=["wandb"],
         gradient_checkpointing=True,

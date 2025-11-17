@@ -197,7 +197,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate trained SFT auditor model")
     parser.add_argument("--episodes", type=int, default=100, help="Number of evaluation episodes")
     parser.add_argument("--max_dialogues", type=int, default=30, help="Max dialogue turns per episode")
-    parser.add_argument("--model_path", type=str, default="SFT/trained_models",
+    parser.add_argument("--model_path", type=str, default="SFT/trained_models/qwen3-4b-sft-os1-epoch",
                         help="Path to trained model (default: final model, use --use-checkpoint for latest checkpoint)")
     parser.add_argument("--chat-model", type=str, default=None, help="Override chat agent model name")
     parser.add_argument("--temperature", type=float, default=0.1, help="Auditor sampling temperature")

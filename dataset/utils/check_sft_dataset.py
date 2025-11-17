@@ -8,7 +8,7 @@ Quick sanity checks for TRL SFT datasets.
 - Summarizes counts and shows a few problematic rows.
 
 Usage:
-  python check_sft_dataset.py --data dataset/cleaned_data/final_data_os_3.jsonl \
+  python dataset/check_sft_dataset.py --data dataset/cleaned_data/final_data_os_3.jsonl \
                               --model Qwen/Qwen3-4B-Instruct-2507 \
                               --max-seq-length 2048 --limit 5000
 """
