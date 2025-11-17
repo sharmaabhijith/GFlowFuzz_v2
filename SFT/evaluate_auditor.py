@@ -60,7 +60,8 @@ def _config_value(cfg: Any, key: str, default: Any = None) -> Any:
 
 
 def computed_dataset_path(auditor_cfg: Any, chat_cfg: Any) -> Path:
-    auditor_model = sanitize_for_filename(str(_config_value(auditor_cfg, "model_name", "auditor")))
+    model_path = sanitize_for_filename(str(_config_value(auditor_cfg, "model_name")))
+    auditor_model = model_path.split("/")[-1]
     chat_model = sanitize_for_filename(str(_config_value(chat_cfg, "model_name", "chat")))
     temperature = float(_config_value(auditor_cfg, "temperature"))
     temp_suffix = int(round(temperature * 10))
@@ -195,19 +196,16 @@ def run_episode(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate trained SFT auditor model")
-    parser.add_argument("--episodes", type=int, default=100, help="Number of evaluation episodes")
-    parser.add_argument("--max_dialogues", type=int, default=30, help="Max dialogue turns per episode")
-    parser.add_argument("--model_path", type=str, default="SFT/trained_models/qwen3-4b-sft-os1-epoch",
+    parser.add_argument("--episodes", type=int, default=1, help="Number of evaluation episodes")
+    parser.add_argument("--max_dialogues", type=int, default=20, help="Max dialogue turns per episode")
+    parser.add_argument("--model_path", type=str, default="SFT/trained_models/qwen3-4b-sft-os1-epoch-qv",
                         help="Path to trained model (default: final model, use --use-checkpoint for latest checkpoint)")
     parser.add_argument("--chat-model", type=str, default=None, help="Override chat agent model name")
-    parser.add_argument("--temperature", type=float, default=0.1, help="Auditor sampling temperature")
+    parser.add_argument("--temperature", type=float, default=0.4, help="Auditor sampling temperature")
     parser.add_argument("--device", type=str, default="auto", help="Device to use (auto, cuda, cpu)")
 
     args = parser.parse_args()
     max_diag = args.max_dialogues
-
-    # Determine which model to load
-    model_base_path = Path(args.model_path)
     
     model_path = args.model_path
     print("Using final trained model")
@@ -315,9 +313,6 @@ def main() -> None:
                     f"failures={failed} | eps={eps_rate:.2f}/s | "
                     f"elapsed={fmt_secs(elapsed)} | eta={fmt_secs(eta)}"
                 )
-
-                break
-
             except Exception as e:
                 failed += 1
                 continue

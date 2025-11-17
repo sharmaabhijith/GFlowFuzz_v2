@@ -168,7 +168,7 @@ class AuditorAgent:
             messages = []
             if self.config.system_prompt:
                 messages.append({"role": "system", "content": self.config.system_prompt})
-            messages.append({"role": "user", "content": state})
+            messages.append({"role": "", "content": state})
 
             # Apply chat template
             prompt = self.tokenizer.apply_chat_template(

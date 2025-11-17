@@ -155,7 +155,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="dataset/cleaned_data/final_data_os_1.jsonl")
     ap.add_argument("--model", default="Qwen/Qwen3-4B-Instruct-2507")
-    ap.add_argument("--out", default="SFT/trained_models/qwen3-4b-os1-epoch")
+    ap.add_argument("--out", default="SFT/trained_models/qwen3-4b-os1-step-qv")
     ap.add_argument("--seq", type=int, default=1024)
     ap.add_argument("--batch", type=int, default=1)
     ap.add_argument("--accum", type=int, default=16)
