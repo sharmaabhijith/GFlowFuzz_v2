@@ -77,54 +77,31 @@ class AuditorAgent:
         model_dtype = torch.float16 if supports_half_precision else torch.float32
 
         model_path = Path(self.config.model_name)
+        # Load the adapter config to get the base model
+        peft_config = PeftConfig.from_pretrained(str(model_path))
+        base_model_name = peft_config.base_model_name_or_path
 
-        # Check if this is a PEFT adapter directory
-        is_peft_adapter = (model_path / "adapter_config.json").exists()
+        # Load tokenizer from adapter path (it should have the tokenizer files)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            str(model_path),
+            trust_remote_code=True,
+        )
 
-        if is_peft_adapter:
-            logger.info(f"Loading PEFT adapter from {model_path}")
-            # Load the adapter config to get the base model
-            peft_config = PeftConfig.from_pretrained(str(model_path))
-            base_model_name = peft_config.base_model_name_or_path
+        # Load base model
+        logger.info(f"Loading base model on {self.device} with dtype {model_dtype}")
+        base_model = AutoModelForCausalLM.from_pretrained(
+            base_model_name,
+            trust_remote_code=True,
+            torch_dtype=model_dtype,
+            device_map="auto",
+        )
 
-            logger.info(f"Base model: {base_model_name}")
-
-            # Load tokenizer from adapter path (it should have the tokenizer files)
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                str(model_path),
-                trust_remote_code=True,
-            )
-
-            # Load base model
-            logger.info(f"Loading base model on {self.device} with dtype {model_dtype}")
-            base_model = AutoModelForCausalLM.from_pretrained(
-                base_model_name,
-                trust_remote_code=True,
-                torch_dtype=model_dtype,
-                device_map="auto",
-            )
-
-            # Load and merge PEFT adapter
-            logger.info(f"Applying PEFT adapter...")
-            self.model = PeftModel.from_pretrained(base_model, str(model_path))
-            # Merge adapter weights into base model for faster inference
-            logger.info(f"Merging adapter weights...")
-            self.model = self.model.merge_and_unload()
-
-        else:
-            # Regular model loading (no adapter)
-            logger.info(f"Loading model from {model_path}")
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.config.model_name,
-                trust_remote_code=True,
-            )
-
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.config.model_name,
-                trust_remote_code=True,
-                torch_dtype=model_dtype,
-                device_map="auto",
-            )
+        # Load and merge PEFT adapter
+        logger.info(f"Applying PEFT adapter...")
+        self.model = PeftModel.from_pretrained(base_model, str(model_path))
+        # Merge adapter weights into base model for faster inference
+        logger.info(f"Merging adapter weights...")
+        self.model = self.model.merge_and_unload()
 
         # Configure tokenizer
         if self.tokenizer.pad_token is None and hasattr(self.tokenizer, "eos_token"):
